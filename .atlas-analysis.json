@@ -1,0 +1,173 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Vespa",
+  "projectDescription": "AI-powered search engine and vector database for building search, recommendation, and RAG applications at scale.",
+  "theme": "aspen",
+  "primaryColor": "#040404",
+  "lightColor": "#62d38b",
+  "darkColor": "#48825c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/documents",
+              "concepts/schemas",
+              "concepts/search",
+              "concepts/ranking",
+              "concepts/tensors"
+            ]
+          },
+          {
+            "group": "Search & Query",
+            "pages": [
+              "search/query-language",
+              "search/vector-search",
+              "search/text-search",
+              "search/grouping-aggregation",
+              "search/ranking-expressions"
+            ]
+          },
+          {
+            "group": "Data Operations",
+            "pages": [
+              "data/feeding-data",
+              "data/document-api",
+              "data/indexing",
+              "data/updates-deletes"
+            ]
+          },
+          {
+            "group": "Machine Learning",
+            "pages": [
+              "ml/models-overview",
+              "ml/embeddings",
+              "ml/onnx-models",
+              "ml/stateless-model-evaluation",
+              "ml/rag-applications"
+            ]
+          },
+          {
+            "group": "Configuration & Deployment",
+            "pages": [
+              "deployment/application-packages",
+              "deployment/services-xml",
+              "deployment/multinode-systems",
+              "deployment/docker",
+              "deployment/vespa-cloud"
+            ]
+          },
+          {
+            "group": "Performance & Operations",
+            "pages": [
+              "operations/monitoring",
+              "operations/scaling",
+              "operations/tuning",
+              "operations/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "HTTP APIs",
+            "pages": [
+              "api/overview",
+              "api/document-v1",
+              "api/search-api",
+              "api/deploy-api"
+            ]
+          },
+          {
+            "group": "Java APIs",
+            "pages": [
+              "api/java/container",
+              "api/java/searcher",
+              "api/java/document-processor",
+              "api/java/component"
+            ]
+          },
+          {
+            "group": "Client Libraries",
+            "pages": [
+              "api/clients/vespa-cli",
+              "api/clients/java-client",
+              "api/clients/feed-client"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Development Guide",
+            "pages": [
+              "development/overview",
+              "development/building",
+              "development/testing",
+              "development/code-map"
+            ]
+          },
+          {
+            "group": "Component Development",
+            "pages": [
+              "development/searchers",
+              "development/document-processors",
+              "development/handlers",
+              "development/plugins"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/guide",
+              "contributing/pull-requests",
+              "contributing/versioning"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Vector search and embeddings for semantic search and RAG",
+    "Hybrid search combining text, vector, and structured data",
+    "Real-time indexing and serving with low latency",
+    "Distributed query execution with ranking and grouping",
+    "ML model integration (ONNX, TensorFlow, custom models)",
+    "Tensor computation engine for advanced ranking",
+    "Elastic and auto-recovering data storage",
+    "Stateless container layer with custom component development",
+    "Multi-tenancy and cloud deployment support",
+    "Comprehensive query language (YQL) and APIs"
+  ],
+  "publicApiSurface": [
+    "/document/v1/ - Document API for feeding and retrieving documents",
+    "/search/ - Query API for searching and ranking",
+    "Vespa CLI - Command-line tool for application deployment",
+    "Java Searcher API - Custom search logic components",
+    "Java Document Processor API - Document processing pipeline",
+    "Java Component API - Dependency injection framework",
+    "Feed Client API - High-performance feeding library",
+    "Query Language (YQL) - SQL-like query syntax",
+    "Ranking Expressions - Custom ranking functions",
+    "Schema Definition Language - Document structure and indexing",
+    "Config API - Application configuration system",
+    "Tensor API - Tensor operations and computation"
+  ]
+}
