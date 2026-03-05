@@ -1,0 +1,579 @@
+---
+title: Multi-node Systems
+description: Deploy and configure Vespa across multiple nodes for scalability and high availability
+---
+
+## Overview
+
+Vespa supports deployment across multiple nodes to achieve horizontal scalability, high availability, and fault tolerance. This guide covers multi-node architecture, configuration, and best practices.
+
+## Architecture Components
+
+### Node Types
+
+A Vespa multi-node deployment typically includes:
+
+- **Container Nodes**: Handle queries, document processing, and application logic
+- **Content Nodes**: Store documents and serve search requests
+- **Admin Nodes**: Coordinate cluster operations, logging, and monitoring
+
+```xml services.xml
+<services version="1.0">
+  <admin version="2.0">
+    <adminserver hostalias="admin1"/>
+    <logserver hostalias="admin1"/>
+    <slobroks>
+      <slobrok hostalias="admin1"/>
+      <slobrok hostalias="admin2"/>
+    </slobroks>
+  </admin>
+  
+  <container id="query" version="1.0">
+    <search/>
+    <nodes>
+      <node hostalias="container1"/>
+      <node hostalias="container2"/>
+      <node hostalias="container3"/>
+    </nodes>
+  </container>
+  
+  <content id="documents" version="1.0">
+    <redundancy>2</redundancy>
+    <documents>
+      <document type="doc" mode="index"/>
+    </documents>
+    <nodes>
+      <node hostalias="content1" distribution-key="0"/>
+      <node hostalias="content2" distribution-key="1"/>
+      <node hostalias="content3" distribution-key="2"/>
+    </nodes>
+  </content>
+</services>
+```
+
+## Host Configuration
+
+### hosts.xml
+
+Define host mappings in `hosts.xml`:
+
+```xml hosts.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<hosts>
+  <!-- Admin nodes -->
+  <host name="admin1.example.com">
+    <alias>admin1</alias>
+  </host>
+  <host name="admin2.example.com">
+    <alias>admin2</alias>
+  </host>
+  
+  <!-- Container nodes -->
+  <host name="container1.example.com">
+    <alias>container1</alias>
+  </host>
+  <host name="container2.example.com">
+    <alias>container2</alias>
+  </host>
+  <host name="container3.example.com">
+    <alias>container3</alias>
+  </host>
+  
+  <!-- Content nodes -->
+  <host name="content1.example.com">
+    <alias>content1</alias>
+  </host>
+  <host name="content2.example.com">
+    <alias>content2</alias>
+  </host>
+  <host name="content3.example.com">
+    <alias>content3</alias>
+  </host>
+</hosts>
+```
+
+### Environment-Specific Hosts
+
+Use preprocessing for environment-specific configuration:
+
+```xml hosts.xml
+<hosts xmlns:deploy="vespa" xmlns:preprocess="properties">
+  <preprocess:properties>
+    <node1.hostname>dev1.example.com</node1.hostname>
+    <node1.hostname deploy:environment="prod">prod1.example.com</node1.hostname>
+    
+    <node2.hostname>dev2.example.com</node2.hostname>
+    <node2.hostname deploy:environment="prod">prod2.example.com</node2.hostname>
+  </preprocess:properties>
+  
+  <host name="${node1.hostname}">
+    <alias>node1</alias>
+  </host>
+  
+  <host name="${node2.hostname}">
+    <alias>node2</alias>
+  </host>
+</hosts>
+```
+
+## Content Distribution
+
+### Flat Distribution
+
+Simplest configuration - documents distributed evenly across all nodes:
+
+```xml
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+    <node hostalias="node4" distribution-key="3"/>
+  </nodes>
+</content>
+```
+
+<Note>
+The `distribution-key` must be unique for each node and typically starts at 0.
+</Note>
+
+### Hierarchical Distribution Groups
+
+Organize nodes into hierarchical groups for better data locality and fault tolerance:
+
+```xml
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  
+  <group name="top">
+    <!-- Distribute across 2 groups, each gets one copy -->
+    <distribution partitions="2|*"/>
+    
+    <group name="datacenter1" distribution-key="0">
+      <node hostalias="dc1-node1" distribution-key="0"/>
+      <node hostalias="dc1-node2" distribution-key="1"/>
+      <node hostalias="dc1-node3" distribution-key="2"/>
+    </group>
+    
+    <group name="datacenter2" distribution-key="1">
+      <node hostalias="dc2-node1" distribution-key="3"/>
+      <node hostalias="dc2-node2" distribution-key="4"/>
+      <node hostalias="dc2-node3" distribution-key="5"/>
+    </group>
+  </group>
+</content>
+```
+
+### Distribution Partitions
+
+The `partitions` attribute controls how documents are distributed:
+
+<Accordion title="Understanding Partitions">
+  **Format**: `partitions="<level1>|<level2>|..."`
+  
+  - `*` - Distribute across all groups at this level
+  - `N` - Distribute across N groups at this level
+  - `1` - Keep all data in one group (useful for query routing)
+  
+  **Examples**:
+  - `"2|*"` - Split across 2 top-level groups, all nodes within each group
+  - `"1|*"` - All data in one top-level group, distributed within
+  - `"*"` - Distribute across all groups evenly
+</Accordion>
+
+### Three-Level Hierarchy
+
+For large-scale deployments with multiple datacenters and racks:
+
+```xml
+<content id="documents" version="1.0">
+  <redundancy>3</redundancy>
+  <documents>
+    <document type="document" mode="index"/>
+  </documents>
+  
+  <group name="root">
+    <distribution partitions="3|*|*"/>
+    
+    <group name="us-east" distribution-key="0">
+      <group name="rack1" distribution-key="0">
+        <node hostalias="use-r1-n1" distribution-key="0"/>
+        <node hostalias="use-r1-n2" distribution-key="1"/>
+      </group>
+      <group name="rack2" distribution-key="1">
+        <node hostalias="use-r2-n1" distribution-key="2"/>
+        <node hostalias="use-r2-n2" distribution-key="3"/>
+      </group>
+    </group>
+    
+    <group name="us-west" distribution-key="1">
+      <group name="rack1" distribution-key="2">
+        <node hostalias="usw-r1-n1" distribution-key="4"/>
+        <node hostalias="usw-r1-n2" distribution-key="5"/>
+      </group>
+      <group name="rack2" distribution-key="3">
+        <node hostalias="usw-r2-n1" distribution-key="6"/>
+        <node hostalias="usw-r2-n2" distribution-key="7"/>
+      </group>
+    </group>
+    
+    <group name="eu-west" distribution-key="2">
+      <group name="rack1" distribution-key="4">
+        <node hostalias="euw-r1-n1" distribution-key="8"/>
+        <node hostalias="euw-r1-n2" distribution-key="9"/>
+      </group>
+      <group name="rack2" distribution-key="5">
+        <node hostalias="euw-r2-n1" distribution-key="10"/>
+        <node hostalias="euw-r2-n2" distribution-key="11"/>
+      </group>
+    </group>
+  </group>
+</content>
+```
+
+## Redundancy and Replication
+
+### Configuring Redundancy
+
+```xml
+<content id="music" version="1.0">
+  <!-- Store 3 copies of each document -->
+  <redundancy>3</redundancy>
+  
+  <!-- Only 2 copies are searchable (reduces indexing load) -->
+  <searchable-copies>2</searchable-copies>
+  
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+    <node hostalias="node4" distribution-key="3"/>
+  </nodes>
+</content>
+```
+
+<Warning>
+`searchable-copies` must be less than or equal to `redundancy`. Setting it lower reduces CPU and memory usage for indexing.
+</Warning>
+
+### Redundancy Recommendations
+
+<Steps>
+  <Step title="Development">
+    Use `redundancy="1"` to minimize resource usage
+  </Step>
+  
+  <Step title="Production">
+    Use `redundancy="2"` or `redundancy="3"` for high availability
+  </Step>
+  
+  <Step title="Critical Systems">
+    Use `redundancy="3"` with hierarchical groups across datacenters
+  </Step>
+</Steps>
+
+## Elastic Content Cluster
+
+Resize clusters without downtime:
+
+### Adding Nodes
+
+```xml
+<!-- Before: 3 nodes -->
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+  </nodes>
+</content>
+
+<!-- After: 6 nodes - just add new nodes -->
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+    <node hostalias="node4" distribution-key="3"/>
+    <node hostalias="node5" distribution-key="4"/>
+    <node hostalias="node6" distribution-key="5"/>
+  </nodes>
+</content>
+```
+
+Vespa automatically redistributes documents to new nodes.
+
+### Removing Nodes
+
+To remove nodes:
+
+1. Update `services.xml` to remove node entries
+2. Deploy the updated configuration
+3. Vespa redistributes data before retiring nodes
+
+<Note>
+Node removal triggers automatic data redistribution. Monitor cluster health during this process.
+</Note>
+
+## Cluster Controller Configuration
+
+Tune cluster controller behavior for large clusters:
+
+```xml
+<content id="documents" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="doc" mode="index"/>
+  </documents>
+  
+  <tuning>
+    <cluster-controller>
+      <!-- Time to wait before marking node down (seconds) -->
+      <transition-time>5</transition-time>
+      
+      <!-- Time for node to initialize before marking as slow -->
+      <init-progress-time>2</init-progress-time>
+      
+      <!-- Maximum crashes before permanent down -->
+      <max-premature-crashes>3</max-premature-crashes>
+      
+      <!-- Time system must be stable before crash count resets -->
+      <stable-state-period>240</stable-state-period>
+      
+      <!-- Minimum ratio of distributors up -->
+      <min-distributor-up-ratio>0.0</min-distributor-up-ratio>
+      
+      <!-- Minimum ratio of storage nodes up (0.7 = 70%) -->
+      <min-storage-up-ratio>0.7</min-storage-up-ratio>
+    </cluster-controller>
+  </tuning>
+  
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+  </nodes>
+</content>
+```
+
+## Container Cluster Scaling
+
+### Query Load Balancing
+
+Multiple container nodes automatically load balance queries:
+
+```xml
+<container id="query" version="1.0">
+  <search>
+    <chain id="default" inherits="vespa"/>
+  </search>
+  
+  <!-- Traffic distributed across all nodes -->
+  <nodes>
+    <node hostalias="qrs1"/>
+    <node hostalias="qrs2"/>
+    <node hostalias="qrs3"/>
+    <node hostalias="qrs4"/>
+  </nodes>
+</container>
+```
+
+### Document Processing Load Balancing
+
+Separate feed and query containers:
+
+```xml
+<!-- Query container cluster -->
+<container id="query" version="1.0">
+  <search/>
+  <nodes>
+    <node hostalias="qrs1"/>
+    <node hostalias="qrs2"/>
+    <node hostalias="qrs3"/>
+  </nodes>
+</container>
+
+<!-- Feed container cluster -->
+<container id="feed" version="1.0">
+  <document-api/>
+  <document-processing/>
+  <nodes>
+    <node hostalias="feed1"/>
+    <node hostalias="feed2"/>
+  </nodes>
+</container>
+```
+
+## Network Requirements
+
+### Port Configuration
+
+Vespa uses various ports for inter-node communication:
+
+- **19070**: Config server (for deployments)
+- **19071**: Config proxy
+- **19092**: Logserver
+- **19099**: State API
+- **8080**: Container HTTP (queries/feeding)
+- **19110-19899**: Dynamic port range for services
+
+<Warning>
+Ensure firewalls allow traffic between all Vespa nodes on these ports.
+</Warning>
+
+## High Availability Setup
+
+A production-ready multi-node configuration:
+
+```xml services.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0">
+  
+  <admin version="2.0">
+    <adminserver hostalias="admin1"/>
+    <logserver hostalias="admin1"/>
+    
+    <!-- Multiple slobroks for redundancy -->
+    <slobroks>
+      <slobrok hostalias="admin1"/>
+      <slobrok hostalias="admin2"/>
+      <slobrok hostalias="admin3"/>
+    </slobroks>
+    
+    <monitoring interval="60"/>
+  </admin>
+  
+  <!-- Query processing cluster -->
+  <container id="query" version="1.0">
+    <search/>
+    <nodes>
+      <node hostalias="qrs1"/>
+      <node hostalias="qrs2"/>
+      <node hostalias="qrs3"/>
+    </nodes>
+  </container>
+  
+  <!-- Document feeding cluster -->
+  <container id="feed" version="1.0">
+    <document-api/>
+    <nodes>
+      <node hostalias="feed1"/>
+      <node hostalias="feed2"/>
+    </nodes>
+  </container>
+  
+  <!-- Content cluster with geographic distribution -->
+  <content id="documents" version="1.0">
+    <redundancy>3</redundancy>
+    <searchable-copies>2</searchable-copies>
+    
+    <documents>
+      <document type="document" mode="index"/>
+    </documents>
+    
+    <tuning>
+      <cluster-controller>
+        <transition-time>5</transition-time>
+        <min-storage-up-ratio>0.7</min-storage-up-ratio>
+      </cluster-controller>
+    </tuning>
+    
+    <group name="top">
+      <distribution partitions="3|*"/>
+      
+      <group name="datacenter1" distribution-key="0">
+        <node hostalias="dc1-content1" distribution-key="0"/>
+        <node hostalias="dc1-content2" distribution-key="1"/>
+      </group>
+      
+      <group name="datacenter2" distribution-key="1">
+        <node hostalias="dc2-content1" distribution-key="2"/>
+        <node hostalias="dc2-content2" distribution-key="3"/>
+      </group>
+      
+      <group name="datacenter3" distribution-key="2">
+        <node hostalias="dc3-content1" distribution-key="4"/>
+        <node hostalias="dc3-content2" distribution-key="5"/>
+      </group>
+    </group>
+  </content>
+  
+</services>
+```
+
+## Monitoring Multi-node Clusters
+
+### Cluster State API
+
+Check cluster health:
+
+```bash
+curl http://localhost:19071/state/v1/health
+```
+
+### Node Metrics
+
+Monitor individual nodes:
+
+```bash
+curl http://container-node:8080/state/v1/metrics
+```
+
+### Content Cluster Status
+
+View content cluster distribution:
+
+```bash
+vespa-get-cluster-state
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Start Small, Scale Up">
+    Begin with a minimal multi-node setup and add nodes as needed based on performance metrics.
+  </Step>
+  
+  <Step title="Use Hierarchical Groups">
+    Organize nodes by physical location (datacenter, rack) to improve fault tolerance.
+  </Step>
+  
+  <Step title="Monitor During Scaling">
+    Watch cluster health and performance metrics when adding or removing nodes.
+  </Step>
+  
+  <Step title="Plan for Growth">
+    Use consistent distribution keys and leave room for expansion in your numbering scheme.
+  </Step>
+  
+  <Step title="Test Failover">
+    Regularly test node failure scenarios to ensure high availability works as expected.
+  </Step>
+</Steps>
+
+## Related Resources
+
+- [Application Packages](/deployment/application-packages)
+- [services.xml Configuration](/deployment/services-xml)
+- [Docker Deployment](/deployment/docker)
+- [Vespa Cloud](/deployment/vespa-cloud)

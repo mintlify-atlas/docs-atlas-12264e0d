@@ -1,0 +1,643 @@
+---
+title: Writing HTTP Handlers
+description: Create custom HTTP request handlers to implement REST APIs and custom endpoints in Vespa
+---
+
+HTTP handlers process incoming HTTP requests and generate responses in Vespa's container. They enable you to implement custom REST APIs, webhooks, admin interfaces, and specialized request processing logic.
+
+## Overview
+
+HTTP handlers allow you to:
+- **Implement REST APIs** with custom business logic
+- **Create custom endpoints** for monitoring, administration, or webhooks
+- **Process non-standard requests** that don't fit the search or feed APIs
+- **Integrate external systems** through HTTP interfaces
+- **Build specialized protocols** on top of HTTP
+
+## Handler Types
+
+Vespa provides two main base classes for HTTP handlers:
+
+### ThreadedHttpRequestHandler
+
+For synchronous request processing with automatic thread management:
+
+```java
+import com.yahoo.container.jdisc.HttpRequest;
+import com.yahoo.container.jdisc.HttpResponse;
+import com.yahoo.container.jdisc.ThreadedHttpRequestHandler;
+import java.io.IOException;
+import java.io.OutputStream;
+
+public class MyHandler extends ThreadedHttpRequestHandler {
+
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        // Process request and return response
+        return new JsonResponse(200, "{\"status\":\"ok\"}");
+    }
+    
+    private static class JsonResponse extends HttpResponse {
+        private final String json;
+        
+        JsonResponse(int status, String json) {
+            super(status);
+            this.json = json;
+        }
+        
+        @Override
+        public void render(OutputStream output) throws IOException {
+            output.write(json.getBytes());
+        }
+        
+        @Override
+        public String getContentType() {
+            return "application/json";
+        }
+    }
+}
+```
+
+### ThreadedRequestHandler
+
+For lower-level request handling with full control over request/response lifecycle:
+
+```java
+import com.yahoo.jdisc.handler.ThreadedRequestHandler;
+import com.yahoo.jdisc.handler.ResponseHandler;
+import com.yahoo.jdisc.handler.BufferedContentChannel;
+import com.yahoo.jdisc.Request;
+import com.yahoo.jdisc.Response;
+import java.util.concurrent.Executor;
+
+public class LowLevelHandler extends ThreadedRequestHandler {
+
+    public LowLevelHandler(Executor executor) {
+        super(executor);
+    }
+
+    @Override
+    protected void handleRequest(Request request, 
+                                BufferedContentChannel requestContent,
+                                ResponseHandler responseHandler) {
+        Response response = new Response(200);
+        responseHandler.handleResponse(response);
+    }
+}
+```
+
+## Basic Handler Structure
+
+A simple handler returning JSON:
+
+```java
+package com.example;
+
+import com.yahoo.component.annotation.Inject;
+import com.yahoo.container.jdisc.HttpRequest;
+import com.yahoo.container.jdisc.HttpResponse;
+import com.yahoo.container.jdisc.ThreadedHttpRequestHandler;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executor;
+
+public class HelloHandler extends ThreadedHttpRequestHandler {
+
+    @Inject
+    public HelloHandler(Executor executor) {
+        super(executor);
+    }
+
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        String name = request.getProperty("name");
+        if (name == null) {
+            name = "World";
+        }
+        
+        return new StringResponse(200, 
+            String.format("{\"message\":\"Hello, %s!\"}", name));
+    }
+}
+```
+
+## Request Processing
+
+### Reading Request Data
+
+<CodeGroup>
+```java Query Parameters
+@Override
+public HttpResponse handle(HttpRequest request) {
+    // Get query parameters
+    String param = request.getProperty("param");
+    
+    // With default value
+    String value = request.getProperty("key", "default");
+    
+    // All parameters
+    Map<String, String> params = request.propertyMap();
+    
+    return new MyResponse(params);
+}
+```
+
+```java Request Body
+@Override
+public HttpResponse handle(HttpRequest request) {
+    try {
+        // Read request body
+        byte[] body = request.getData().readAllBytes();
+        String bodyStr = new String(body, StandardCharsets.UTF_8);
+        
+        // Parse JSON or other format
+        JsonNode json = objectMapper.readTree(bodyStr);
+        
+        return processJson(json);
+    } catch (IOException e) {
+        return new ErrorResponse(400, "Invalid request body");
+    }
+}
+```
+
+```java HTTP Headers
+@Override
+public HttpResponse handle(HttpRequest request) {
+    // Get single header
+    String auth = request.getHeader("Authorization");
+    
+    // Get all headers
+    Map<String, List<String>> headers = request.getJDiscRequest().headers();
+    
+    // Check header existence
+    if (request.getHeader("X-Custom-Header") != null) {
+        // Process custom header
+    }
+    
+    return new MyResponse();
+}
+```
+
+```java HTTP Method
+@Override
+public HttpResponse handle(HttpRequest request) {
+    // Get HTTP method
+    String method = request.getMethod().name();
+    
+    return switch (method) {
+        case "GET" -> handleGet(request);
+        case "POST" -> handlePost(request);
+        case "PUT" -> handlePut(request);
+        case "DELETE" -> handleDelete(request);
+        default -> new ErrorResponse(405, "Method not allowed");
+    };
+}
+```
+</CodeGroup>
+
+### URI and Path Handling
+
+```java
+@Override
+public HttpResponse handle(HttpRequest request) {
+    // Get full URI
+    URI uri = request.getUri();
+    
+    // Get path
+    String path = uri.getPath();
+    
+    // Parse path segments
+    String[] segments = path.split("/");
+    if (segments.length > 2) {
+        String resourceType = segments[1];
+        String resourceId = segments[2];
+        return handleResource(resourceType, resourceId);
+    }
+    
+    return new ErrorResponse(404, "Not found");
+}
+```
+
+## Response Generation
+
+### Custom Response Classes
+
+```java
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
+public class JsonResponse extends HttpResponse {
+    private final String jsonContent;
+    
+    public JsonResponse(int status, String jsonContent) {
+        super(status);
+        this.jsonContent = jsonContent;
+    }
+    
+    @Override
+    public void render(OutputStream output) throws IOException {
+        output.write(jsonContent.getBytes(StandardCharsets.UTF_8));
+    }
+    
+    @Override
+    public String getContentType() {
+        return "application/json; charset=utf-8";
+    }
+}
+
+public class ErrorResponse extends JsonResponse {
+    public ErrorResponse(int status, String message) {
+        super(status, 
+            String.format("{\"error\":\"%s\",\"status\":%d}", 
+                message, status));
+    }
+}
+```
+
+### Setting Response Headers
+
+```java
+@Override
+public HttpResponse handle(HttpRequest request) {
+    MyResponse response = new MyResponse();
+    
+    // Set custom headers
+    response.headers().put("X-Custom-Header", "value");
+    response.headers().put("Cache-Control", "no-cache");
+    response.headers().put("Access-Control-Allow-Origin", "*");
+    
+    return response;
+}
+```
+
+### Streaming Responses
+
+```java
+import java.io.OutputStream;
+
+public class StreamingResponse extends HttpResponse {
+    private final DataSource dataSource;
+    
+    public StreamingResponse(DataSource source) {
+        super(200);
+        this.dataSource = source;
+    }
+    
+    @Override
+    public void render(OutputStream output) throws IOException {
+        // Stream data in chunks
+        byte[] buffer = new byte[8192];
+        int bytesRead;
+        
+        try (var stream = dataSource.openStream()) {
+            while ((bytesRead = stream.read(buffer)) != -1) {
+                output.write(buffer, 0, bytesRead);
+                output.flush();
+            }
+        }
+    }
+    
+    @Override
+    public String getContentType() {
+        return "application/octet-stream";
+    }
+}
+```
+
+## Common Handler Patterns
+
+### REST API Handler
+
+```java
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+public class RestApiHandler extends ThreadedHttpRequestHandler {
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final DataService dataService;
+    
+    @Inject
+    public RestApiHandler(Executor executor, DataService dataService) {
+        super(executor);
+        this.dataService = dataService;
+    }
+    
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        String method = request.getMethod().name();
+        String path = request.getUri().getPath();
+        
+        try {
+            return switch (method) {
+                case "GET" -> handleGet(path, request);
+                case "POST" -> handlePost(path, request);
+                case "PUT" -> handlePut(path, request);
+                case "DELETE" -> handleDelete(path, request);
+                default -> methodNotAllowed();
+            };
+        } catch (Exception e) {
+            log.log(Level.SEVERE, "Request processing failed", e);
+            return new ErrorResponse(500, "Internal server error");
+        }
+    }
+    
+    private HttpResponse handleGet(String path, HttpRequest request) {
+        String id = extractId(path);
+        var data = dataService.get(id);
+        
+        if (data == null) {
+            return new ErrorResponse(404, "Not found");
+        }
+        
+        return new JsonResponse(200, toJson(data));
+    }
+    
+    private HttpResponse handlePost(String path, HttpRequest request) 
+            throws IOException {
+        String body = new String(
+            request.getData().readAllBytes(), 
+            StandardCharsets.UTF_8
+        );
+        
+        var data = objectMapper.readValue(body, MyData.class);
+        var created = dataService.create(data);
+        
+        return new JsonResponse(201, toJson(created));
+    }
+    
+    private String extractId(String path) {
+        String[] parts = path.split("/");
+        return parts.length > 2 ? parts[2] : null;
+    }
+    
+    private String toJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+
+### Health Check Handler
+
+```java
+public class HealthHandler extends ThreadedHttpRequestHandler {
+    private final List<HealthCheck> checks;
+    
+    @Inject
+    public HealthHandler(Executor executor, 
+                        ComponentRegistry<HealthCheck> checks) {
+        super(executor);
+        this.checks = new ArrayList<>(checks.allComponents());
+    }
+    
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        boolean allHealthy = true;
+        StringBuilder result = new StringBuilder("{\"checks\":[");
+        
+        for (int i = 0; i < checks.size(); i++) {
+            HealthCheck check = checks.get(i);
+            boolean healthy = check.isHealthy();
+            allHealthy &= healthy;
+            
+            if (i > 0) result.append(",");
+            result.append(String.format(
+                "{\"name\":\"%s\",\"healthy\":%b}",
+                check.getName(), healthy
+            ));
+        }
+        
+        result.append("],\"status\":\"");
+        result.append(allHealthy ? "healthy" : "unhealthy");
+        result.append("\"}");
+        
+        int status = allHealthy ? 200 : 503;
+        return new JsonResponse(status, result.toString());
+    }
+}
+```
+
+## Real-World Example: VipStatusHandler
+
+From `~/workspace/source/container-disc/src/main/java/com/yahoo/container/handler/VipStatusHandler.java:31`:
+
+```java
+import com.yahoo.container.core.VipStatusConfig;
+import com.yahoo.jdisc.Metric;
+
+public final class VipStatusHandler extends ThreadedHttpRequestHandler {
+    private final boolean accessDisk;
+    private final File statusFile;
+    private final VipStatus vipStatus;
+    
+    @Inject
+    public VipStatusHandler(VipStatusConfig vipConfig, 
+                           Metric metric, 
+                           VipStatus vipStatus) {
+        // Dedicated thread pool to avoid returning errors when
+        // regular pool is at capacity
+        super(new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, 
+                                    new LinkedBlockingQueue<>(100)),
+              metric);
+        this.accessDisk = vipConfig.accessdisk();
+        this.statusFile = new File(vipConfig.statusfile());
+        this.vipStatus = vipStatus;
+    }
+    
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        if (metric != null) {
+            metric.add("jdisc.http.requests.status", 1, null);
+        }
+        return new StatusResponse();
+    }
+    
+    class StatusResponse extends HttpResponse {
+        private byte[] data = null;
+        private File file = null;
+        
+        StatusResponse() {
+            super(200);
+            if (vipStatus != null && !vipStatus.isInRotation()) {
+                setOutOfServiceStatus();
+            } else if (accessDisk) {
+                checkFile();
+            } else {
+                data = "<title>OK</title>\n".getBytes();
+            }
+        }
+        
+        @Override
+        public void render(OutputStream stream) throws IOException {
+            if (file != null) {
+                Files.copy(file.toPath(), stream);
+            } else if (data != null) {
+                stream.write(data);
+            }
+            stream.close();
+        }
+        
+        private void setOutOfServiceStatus() {
+            data = "No search backends available".getBytes();
+            setStatus(404);
+        }
+        
+        @Override
+        public String getContentType() {
+            return file != null ? "text/html" : "text/plain";
+        }
+    }
+}
+```
+
+## Handler Configuration
+
+Register handlers in `services.xml`:
+
+```xml
+<container id="default" version="1.0">
+  <handler id="com.example.HelloHandler" bundle="my-bundle">
+    <binding>http://*/hello</binding>
+    <binding>http://*/hello/*</binding>
+  </handler>
+  
+  <handler id="com.example.RestApiHandler" bundle="my-bundle">
+    <binding>http://*/api/v1/*</binding>
+  </handler>
+  
+  <handler id="com.example.HealthHandler" bundle="my-bundle">
+    <binding>http://*/health</binding>
+  </handler>
+</container>
+```
+
+### Handler Initialization
+
+With custom configuration:
+
+```java
+import com.yahoo.component.annotation.Inject;
+
+public class ConfiguredHandler extends ThreadedHttpRequestHandler {
+    private final String configValue;
+    private final int timeout;
+    
+    @Inject
+    public ConfiguredHandler(Executor executor, MyHandlerConfig config) {
+        super(executor);
+        this.configValue = config.value();
+        this.timeout = config.timeout();
+        setTimeout(timeout, TimeUnit.SECONDS);
+    }
+}
+```
+
+## Async Response Handling
+
+For long-running operations:
+
+```java
+import com.yahoo.container.jdisc.AsyncHttpResponse;
+import java.util.concurrent.CompletableFuture;
+
+public class AsyncHandler extends ThreadedHttpRequestHandler {
+    private final AsyncService asyncService;
+    
+    @Inject
+    public AsyncHandler(Executor executor, AsyncService service) {
+        super(executor);
+        this.asyncService = service;
+    }
+    
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        return new AsyncHttpResponse(200) {
+            @Override
+            public void render(OutputStream output,
+                             ContentChannel channel,
+                             CompletionHandler handler) {
+                // Start async operation
+                CompletableFuture.supplyAsync(() -> 
+                    asyncService.fetchData()
+                ).thenAccept(data -> {
+                    try {
+                        output.write(data.getBytes());
+                        output.flush();
+                    } catch (IOException e) {
+                        log.warning("Failed to write response: " + e);
+                    } finally {
+                        handler.completed();
+                    }
+                }).exceptionally(ex -> {
+                    handler.failed(ex);
+                    return null;
+                });
+            }
+        };
+    }
+}
+```
+
+## Testing Handlers
+
+```java
+import com.yahoo.container.jdisc.HttpRequest;
+import com.yahoo.jdisc.http.HttpRequest.Method;
+import org.junit.jupiter.api.Test;
+import java.io.ByteArrayOutputStream;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class MyHandlerTest {
+    
+    @Test
+    public void testHandler() throws Exception {
+        MyHandler handler = new MyHandler(Runnable::run);
+        
+        // Create test request
+        HttpRequest request = HttpRequest.createTestRequest(
+            "http://localhost/test?param=value",
+            Method.GET
+        );
+        
+        // Handle request
+        HttpResponse response = handler.handle(request);
+        
+        // Verify response
+        assertEquals(200, response.getStatus());
+        
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        response.render(out);
+        String content = out.toString();
+        
+        assertTrue(content.contains("expected"));
+    }
+}
+```
+
+## Security Considerations
+
+<Warning>
+- **Validate all input**: Never trust user input
+- **Use authentication**: Implement proper auth for sensitive endpoints
+- **Rate limiting**: Protect against abuse
+- **HTTPS**: Use TLS for production deployments
+</Warning>
+
+## Performance Tips
+
+<Note>
+- Use dedicated thread pools for handlers with different characteristics
+- Stream large responses instead of buffering in memory
+- Set appropriate timeouts with `setTimeout()`
+- Cache expensive computations
+- Monitor handler latency and throughput
+</Note>
+
+## Next Steps
+
+- Learn about [Searchers](/development/searchers) for query processing
+- Explore [Document Processors](/development/document-processors) for feed processing
+- See [Plugins and Bundles](/development/plugins) for packaging handlers

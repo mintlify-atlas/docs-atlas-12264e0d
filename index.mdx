@@ -1,97 +1,366 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Vespa Documentation"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden bg-gradient-to-br from-[#040404] via-[#1a1a1a] to-[#0a0a0a] dark:from-[#040404] dark:via-[#1a1a1a] dark:to-[#0a0a0a] py-20 lg:py-24">
+  <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wMiI+PHBhdGggZD0iTTM2IDM0djItMnptMCAzMmgtMnYyaDJ2LTJ6bS0yIDB2LTJoMnYyaC0yem0yLTMydjJoLTJ2LTJoMnoiLz48L2c+PC9nPjwvc3ZnPg==')] opacity-20"></div>
+  
+  <div className="relative max-w-7xl mx-auto px-6 lg:px-8">
+    <div className="lg:grid lg:grid-cols-12 lg:gap-12 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight">
+          AI-Powered Search Engine & Vector Database
+        </h1>
+        <p className="text-lg sm:text-xl text-gray-300 mb-8 max-w-2xl">
+          Build search, recommendation, and RAG applications at scale with Vespa's unified platform for text search, vector search, and real-time data serving.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a 
+            href="/quickstart" 
+            className="inline-flex items-center px-6 py-3 rounded-full bg-[#62d38b] hover:bg-[#58c17f] text-[#040404] font-semibold transition-colors no-underline"
+          >
+            Get Started
+            <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </a>
+          <a 
+            href="/introduction" 
+            className="inline-flex items-center px-6 py-3 rounded-full border border-white/30 bg-white/10 hover:bg-white/20 text-white font-semibold transition-colors no-underline"
+          >
+            Read the Docs
+          </a>
+        </div>
+      </div>
+      <div className="hidden lg:block lg:col-span-5">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-[#62d38b] to-[#48825c] rounded-2xl blur-3xl opacity-20"></div>
+          <div className="relative bg-[#1a1a1a] dark:bg-[#1a1a1a] border border-[#27272a] dark:border-[#27272a] rounded-2xl p-6 backdrop-blur-sm">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-3 h-3 rounded-full bg-red-500"></div>
+              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div className="w-3 h-3 rounded-full bg-green-500"></div>
+            </div>
+            <pre className="text-sm text-gray-300 overflow-x-auto"><code>{`{
+  "yql": "select * from sources * 
+          where userQuery()",
+  "query": "AI search engine",
+  "ranking": "semantic",
+  "hits": 10
+}`}</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Quick Start</h2>
+    <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Get up and running with Vespa in minutes
+    </p>
+  </div>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+  <Steps>
+    <Step title="Install Vespa CLI">
+      Install the Vespa command-line tool to interact with Vespa instances:
 
-## Make it yours
+      <CodeGroup>
+      ```bash macOS
+      brew install vespa-cli
+      ```
 
-Design a docs site that looks great and empowers your users.
+      ```bash Linux
+      curl -fsSL https://downloads.vespa.ai/vespa-cli/install.sh | sh
+      ```
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
+      ```bash Windows
+      choco install vespa-cli
+      ```
+      </CodeGroup>
+
+      Verify the installation:
+      ```bash
+      vespa version
+      ```
+    </Step>
+
+    <Step title="Create Your First Application">
+      Create a new Vespa application package with a schema definition:
+
+      ```bash
+      mkdir my-app && cd my-app
+      mkdir -p schemas
+      ```
+
+      Create a schema file `schemas/music.sd`:
+
+      ```java schemas/music.sd
+      schema music {
+        document music {
+          field artist type string {
+            indexing: summary | index
+          }
+          field title type string {
+            indexing: summary | index
+          }
+          field year type int {
+            indexing: summary | attribute
+          }
+        }
+      }
+      ```
+    </Step>
+
+    <Step title="Deploy and Feed Data">
+      Deploy the application locally using Docker:
+
+      ```bash
+      vespa deploy --wait 300
+      ```
+
+      Feed a document to your application:
+
+      ```bash
+      vespa document put id:music:music::1 '{
+        "fields": {
+          "artist": "The Beatles",
+          "title": "Hey Jude",
+          "year": 1968
+        }
+      }'
+      ```
+    </Step>
+
+    <Step title="Query Your Data">
+      Search for documents using the Query API:
+
+      ```bash
+      vespa query 'select * from music where title contains "jude"'
+      ```
+
+      <Accordion title="Expected Response">
+      ```json
+      {
+        "root": {
+          "id": "toplevel",
+          "relevance": 1.0,
+          "fields": {
+            "totalCount": 1
+          },
+          "children": [
+            {
+              "id": "id:music:music::1",
+              "relevance": 0.5,
+              "fields": {
+                "artist": "The Beatles",
+                "title": "Hey Jude",
+                "year": 1968
+              }
+            }
+          ]
+        }
+      }
+      ```
+      </Accordion>
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Explore by Topic</h2>
+    <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Deep dive into Vespa's powerful features
+    </p>
+  </div>
+
+  <CardGroup cols={3}>
     <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+      title="Vector Search"
+      icon="magnifying-glass"
+      href="/search/vector-search"
+    >
+      Build semantic search with embeddings and approximate nearest neighbor search
+    </Card>
+    <Card
+      title="Schemas & Documents"
+      icon="file-lines"
+      href="/concepts/schemas"
+    >
+      Define your data model with Vespa's schema definition language
+    </Card>
+    <Card
+      title="Ranking & ML"
+      icon="brain"
+      href="/concepts/ranking"
+    >
+      Deploy machine learning models and custom ranking expressions
+    </Card>
+    <Card
+      title="Document API"
+      icon="database"
+      href="/api/document-v1"
+    >
+      Feed, update, and retrieve documents via HTTP API
+    </Card>
+    <Card
+      title="Query Language"
+      icon="code"
+      href="/search/query-language"
+    >
+      Master YQL, Vespa's powerful SQL-like query language
+    </Card>
+    <Card
+      title="Deployment"
+      icon="rocket"
+      href="/deployment/application-packages"
+    >
+      Deploy to local Docker, Kubernetes, or Vespa Cloud
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Key Features</h2>
+    <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Everything you need to build production-ready search applications
+    </p>
+  </div>
 
-Everything you need to create world-class documentation.
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="bg-gray-50 dark:bg-[#1a1d27] border border-gray-200 dark:border-[#27272a] rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#62d38b]/10 flex items-center justify-center">
+          <svg className="w-6 h-6 text-[#62d38b]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Hybrid Search</h3>
+          <p className="text-gray-600 dark:text-gray-400">
+            Combine text, vector, and structured data queries in a single request for superior search relevance
+          </p>
+        </div>
+      </div>
+    </div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+    <div className="bg-gray-50 dark:bg-[#1a1d27] border border-gray-200 dark:border-[#27272a] rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#62d38b]/10 flex items-center justify-center">
+          <svg className="w-6 h-6 text-[#62d38b]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Real-Time Indexing</h3>
+          <p className="text-gray-600 dark:text-gray-400">
+            Index and serve data in real-time with millisecond latency, no batch processing required
+          </p>
+        </div>
+      </div>
+    </div>
 
-## Need inspiration?
+    <div className="bg-gray-50 dark:bg-[#1a1d27] border border-gray-200 dark:border-[#27272a] rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#62d38b]/10 flex items-center justify-center">
+          <svg className="w-6 h-6 text-[#62d38b]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Tensor Computing</h3>
+          <p className="text-gray-600 dark:text-gray-400">
+            Built-in tensor operations for advanced ranking, embeddings, and machine learning inference
+          </p>
+        </div>
+      </div>
+    </div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    <div className="bg-gray-50 dark:bg-[#1a1d27] border border-gray-200 dark:border-[#27272a] rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#62d38b]/10 flex items-center justify-center">
+          <svg className="w-6 h-6 text-[#62d38b]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Distributed Architecture</h3>
+          <p className="text-gray-600 dark:text-gray-400">
+            Automatically scale across multiple nodes with built-in redundancy and fault tolerance
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Resources</h2>
+    <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Additional resources to help you succeed with Vespa
+    </p>
+  </div>
+
+  <CardGroup cols={2}>
+    <Card
+      title="Sample Applications"
+      icon="flask"
+      href="https://github.com/vespa-engine/sample-apps"
+    >
+      Explore working examples and reference implementations
+    </Card>
+    <Card
+      title="Community Slack"
+      icon="slack"
+      href="https://slack.vespa.ai"
+    >
+      Join the community to ask questions and share feedback
+    </Card>
+    <Card
+      title="Vespa Blog"
+      icon="newspaper"
+      href="https://blog.vespa.ai"
+    >
+      Read about feature updates, use cases, and best practices
+    </Card>
+    <Card
+      title="GitHub Repository"
+      icon="github"
+      href="https://github.com/vespa-engine/vespa"
+    >
+      Contribute to Vespa's open-source development
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-20 mb-16 max-w-5xl mx-auto px-6">
+  <div className="bg-gradient-to-r from-[#040404] to-[#1a1a1a] dark:from-[#040404] dark:to-[#1a1a1a] rounded-2xl p-10 lg:p-12 text-center border border-[#27272a] dark:border-[#27272a]">
+    <h2 className="text-3xl font-bold text-white mb-4">Ready to Build?</h2>
+    <p className="text-lg text-gray-300 mb-8 max-w-2xl mx-auto">
+      Start building powerful search and recommendation applications with Vespa today
+    </p>
+    <div className="flex flex-wrap justify-center gap-4">
+      <a 
+        href="/quickstart" 
+        className="inline-flex items-center px-6 py-3 rounded-full bg-[#62d38b] hover:bg-[#58c17f] text-[#040404] font-semibold transition-colors no-underline"
+      >
+        Get Started Now
+        <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+      </a>
+      <a 
+        href="/api/overview" 
+        className="inline-flex items-center px-6 py-3 rounded-full border border-white/30 bg-white/10 hover:bg-white/20 text-white font-semibold transition-colors no-underline"
+      >
+        Explore API Reference
+      </a>
+    </div>
+  </div>
+</div>

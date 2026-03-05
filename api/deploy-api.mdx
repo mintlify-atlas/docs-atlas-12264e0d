@@ -1,0 +1,639 @@
+---
+title: Deploy API
+description: HTTP API for deploying and managing Vespa applications
+---
+
+The Deploy API provides HTTP endpoints for deploying, activating, and managing Vespa applications. It is primarily used by the Vespa CLI and deployment automation tools.
+
+## Base URL
+
+```
+http://<config-server-host>:19071/application/v2/
+```
+
+<Note>
+The Deploy API runs on the config server, typically on port 19071, not on the regular container port (8080).
+</Note>
+
+## Deployment Workflow
+
+Deploying a Vespa application follows this workflow:
+
+1. **Upload**: Upload application package as a ZIP
+2. **Prepare**: Validate and prepare the application
+3. **Activate**: Make the application live
+
+```mermaid
+graph LR
+    A[Upload ZIP] --> B[Prepare Session]
+    B --> C[Activate Session]
+    C --> D[Application Live]
+```
+
+## Session Management
+
+Vespa uses "sessions" to manage deployments. Each upload creates a new session that can be prepared and activated.
+
+### Upload Application Package
+
+Upload an application package as a ZIP file.
+
+```bash
+curl -X POST \
+  --header "Content-Type: application/zip" \
+  --data-binary @application.zip \
+  http://localhost:19071/application/v2/tenant/default/session
+```
+
+**Request**
+
+<ParamField path="tenant" type="string" default="default">
+  Tenant name
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/zip`
+</ParamField>
+
+**Response**
+
+```json
+{
+  "session-id": "123",
+  "message": "Session created"
+}
+```
+
+<ResponseField name="session-id" type="string">
+  Unique session identifier for this deployment
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Status message
+</ResponseField>
+
+### Prepare Session
+
+Prepare an uploaded session for activation.
+
+```bash
+curl -X PUT \
+  http://localhost:19071/application/v2/tenant/default/session/123/prepared
+```
+
+**Request Parameters**
+
+<ParamField path="tenant" type="string" required>
+  Tenant name
+</ParamField>
+
+<ParamField path="session-id" type="string" required>
+  Session ID from upload
+</ParamField>
+
+<ParamField query="applicationName" type="string" default="default">
+  Application name
+</ParamField>
+
+<ParamField query="instance" type="string" default="default">
+  Instance name
+</ParamField>
+
+<ParamField query="timeout" type="string" default="60s">
+  Preparation timeout
+</ParamField>
+
+<ParamField query="ignoreValidationErrors" type="boolean" default="false">
+  Ignore non-critical validation errors
+</ParamField>
+
+<ParamField query="vespaVersion" type="string">
+  Target Vespa version (defaults to current version)
+</ParamField>
+
+**Response**
+
+```json
+{
+  "log": [
+    {
+      "time": 1640000000000,
+      "level": "info",
+      "message": "Preparing application"
+    }
+  ],
+  "configChangeActions": {
+    "restart": [],
+    "refeed": [],
+    "reindex": []
+  },
+  "tenant": "default",
+  "session-id": "123",
+  "message": "Session prepared"
+}
+```
+
+<ResponseField name="log" type="array">
+  Array of log messages from preparation
+</ResponseField>
+
+<ResponseField name="configChangeActions" type="object">
+  Required actions for deployment
+</ResponseField>
+
+<ResponseField name="configChangeActions.restart" type="array">
+  Services that need restart
+</ResponseField>
+
+<ResponseField name="configChangeActions.refeed" type="array">
+  Document types that need refeeding
+</ResponseField>
+
+<ResponseField name="configChangeActions.reindex" type="array">
+  Document types that need reindexing
+</ResponseField>
+
+**Example: Prepare with Parameters**
+
+```bash
+curl -X PUT "http://localhost:19071/application/v2/tenant/default/session/123/prepared?applicationName=myapp&timeout=120"
+```
+
+### Activate Session
+
+Activate a prepared session to make it live.
+
+```bash
+curl -X PUT \
+  http://localhost:19071/application/v2/tenant/default/session/123/active
+```
+
+**Request Parameters**
+
+<ParamField path="tenant" type="string" required>
+  Tenant name
+</ParamField>
+
+<ParamField path="session-id" type="string" required>
+  Session ID to activate
+</ParamField>
+
+<ParamField query="timeout" type="string" default="120s">
+  Activation timeout
+</ParamField>
+
+<ParamField query="ignoreSessionStaleFailure" type="boolean" default="false">
+  Ignore stale session errors (not recommended for production)
+</ParamField>
+
+**Response**
+
+```json
+{
+  "tenant": "default",
+  "application": "default",
+  "instance": "default",
+  "session-id": "123",
+  "message": "Session activated"
+}
+```
+
+<ResponseField name="tenant" type="string">
+  Tenant name
+</ResponseField>
+
+<ResponseField name="application" type="string">
+  Application name
+</ResponseField>
+
+<ResponseField name="instance" type="string">
+  Instance name
+</ResponseField>
+
+## Application Management
+
+### Get Application Status
+
+Get information about a deployed application.
+
+```bash
+curl http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default
+```
+
+**Response**
+
+```json
+{
+  "generation": 123,
+  "applicationPackageFileReference": "abc123...",
+  "versions": [
+    {
+      "generation": 123,
+      "vespaVersion": "8.250.53"
+    }
+  ]
+}
+```
+
+<ResponseField name="generation" type="integer">
+  Current application generation (deployment version number)
+</ResponseField>
+
+<ResponseField name="applicationPackageFileReference" type="string">
+  Reference to the application package
+</ResponseField>
+
+<ResponseField name="versions" type="array">
+  Array of deployed versions
+</ResponseField>
+
+### Delete Application
+
+Delete a deployed application.
+
+```bash
+curl -X DELETE \
+  http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default
+```
+
+**Response**
+
+```json
+{
+  "message": "Application deleted"
+}
+```
+
+### List Service Convergence
+
+Check if services have converged to the latest configuration.
+
+```bash
+curl "http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/serviceconverge?timeout=60s"
+```
+
+<ParamField query="timeout" type="string" default="5s">
+  Maximum time to wait for convergence
+</ParamField>
+
+<ParamField query="vespaVersion" type="string">
+  Check convergence for specific Vespa version
+</ParamField>
+
+**Response**
+
+```json
+{
+  "url": "http://localhost:19071/application/v2/...",
+  "currentGeneration": 123,
+  "wantedGeneration": 123,
+  "converged": true,
+  "services": [
+    {
+      "host": "localhost",
+      "port": 19100,
+      "type": "searchnode",
+      "clusterName": "content",
+      "url": "http://localhost:19100/state/v1/config",
+      "currentGeneration": 123
+    }
+  ]
+}
+```
+
+<ResponseField name="converged" type="boolean">
+  Whether all services have converged to wanted generation
+</ResponseField>
+
+<ResponseField name="currentGeneration" type="integer">
+  Current config generation across all services
+</ResponseField>
+
+<ResponseField name="wantedGeneration" type="integer">
+  Target config generation
+</ResponseField>
+
+<ResponseField name="services" type="array">
+  List of services with their convergence status
+</ResponseField>
+
+### Check Single Service Convergence
+
+Check convergence for a specific service.
+
+```bash
+curl "http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/serviceconverge/localhost:19100"
+```
+
+**Response**
+
+```json
+{
+  "url": "http://localhost:19071/application/v2/...",
+  "host": "localhost:19100",
+  "wantedGeneration": 123,
+  "converged": true,
+  "currentGeneration": 123
+}
+```
+
+## Application Content
+
+### Get Application Files
+
+Retrieve files from the deployed application package.
+
+```bash
+# List directory contents
+curl http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/content/
+
+# Get specific file
+curl http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/content/services.xml
+```
+
+**Response** (directory listing)
+
+```json
+[
+  {
+    "name": "services.xml",
+    "type": "file",
+    "size": 1234
+  },
+  {
+    "name": "schemas",
+    "type": "directory"
+  }
+]
+```
+
+## Restart Operations
+
+### Restart Services
+
+Restart services in the application.
+
+```bash
+# Restart all services
+curl -X POST \
+  http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/restart
+
+# Restart specific host
+curl -X POST \
+  "http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/restart?hostname=host1.example.com"
+```
+
+<ParamField query="hostname" type="string">
+  Restart only services on specific host
+</ParamField>
+
+<ParamField query="clusterId" type="string">
+  Restart only services in specific cluster
+</ParamField>
+
+<ParamField query="clusterType" type="string">
+  Restart only services of specific type (e.g., `content`, `container`)
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Success"
+}
+```
+
+## Reindexing Operations
+
+### Trigger Reindexing
+
+Trigger reindexing of documents.
+
+```bash
+curl -X POST \
+  "http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/reindex?clusterId=content&documentType=music"
+```
+
+<ParamField query="clusterId" type="string">
+  Target cluster (required for specific document types)
+</ParamField>
+
+<ParamField query="documentType" type="string">
+  Specific document type to reindex
+</ParamField>
+
+<ParamField query="indexedOnly" type="boolean" default="false">
+  Only reindex indexed document types
+</ParamField>
+
+<ParamField query="speed" type="number" default="1.0">
+  Reindexing speed multiplier (0.0-100.0)
+</ParamField>
+
+<ParamField query="cause" type="string">
+  Reason for reindexing (for logging)
+</ParamField>
+
+### Get Reindexing Status
+
+Check status of ongoing reindexing.
+
+```bash
+curl http://localhost:19071/application/v2/tenant/default/application/default/environment/prod/region/default/instance/default/reindexing
+```
+
+**Response**
+
+```json
+{
+  "enabled": true,
+  "clusters": {
+    "content": {
+      "pending": [],
+      "ready": {
+        "music": {
+          "startedMillis": 1640000000000,
+          "endedMillis": 1640003600000,
+          "state": "successful",
+          "progress": 1.0
+        }
+      }
+    }
+  }
+}
+```
+
+## Complete Deployment Example
+
+<CodeGroup>
+```bash Complete Deploy Script
+#!/bin/bash
+
+CONFIG_SERVER="http://localhost:19071"
+TENANT="default"
+APP_NAME="myapp"
+APP_ZIP="application.zip"
+
+# Step 1: Upload application package
+echo "Uploading application package..."
+SESSION_RESPONSE=$(curl -s -X POST \
+  --header "Content-Type: application/zip" \
+  --data-binary @${APP_ZIP} \
+  "${CONFIG_SERVER}/application/v2/tenant/${TENANT}/session")
+
+SESSION_ID=$(echo $SESSION_RESPONSE | jq -r '.["session-id"]')
+echo "Session ID: ${SESSION_ID}"
+
+# Step 2: Prepare session
+echo "Preparing session..."
+PREPARE_RESPONSE=$(curl -s -X PUT \
+  "${CONFIG_SERVER}/application/v2/tenant/${TENANT}/session/${SESSION_ID}/prepared?applicationName=${APP_NAME}")
+
+echo "Prepare response: ${PREPARE_RESPONSE}"
+
+# Step 3: Activate session
+echo "Activating session..."
+ACTIVATE_RESPONSE=$(curl -s -X PUT \
+  "${CONFIG_SERVER}/application/v2/tenant/${TENANT}/session/${SESSION_ID}/active")
+
+echo "Activate response: ${ACTIVATE_RESPONSE}"
+
+# Step 4: Wait for convergence
+echo "Waiting for services to converge..."
+while true; do
+  CONVERGE_RESPONSE=$(curl -s \
+    "${CONFIG_SERVER}/application/v2/tenant/${TENANT}/application/${APP_NAME}/environment/prod/region/default/instance/default/serviceconverge?timeout=30s")
+  
+  CONVERGED=$(echo $CONVERGE_RESPONSE | jq -r '.converged')
+  
+  if [ "$CONVERGED" = "true" ]; then
+    echo "All services converged!"
+    break
+  fi
+  
+  echo "Waiting for convergence..."
+  sleep 5
+done
+
+echo "Deployment complete!"
+```
+
+```python Python Deploy Script
+import requests
+import time
+import json
+
+config_server = "http://localhost:19071"
+tenant = "default"
+app_name = "myapp"
+app_zip = "application.zip"
+
+# Step 1: Upload
+print("Uploading application package...")
+with open(app_zip, 'rb') as f:
+    response = requests.post(
+        f"{config_server}/application/v2/tenant/{tenant}/session",
+        headers={"Content-Type": "application/zip"},
+        data=f
+    )
+
+session_id = response.json()["session-id"]
+print(f"Session ID: {session_id}")
+
+# Step 2: Prepare
+print("Preparing session...")
+response = requests.put(
+    f"{config_server}/application/v2/tenant/{tenant}/session/{session_id}/prepared",
+    params={"applicationName": app_name}
+)
+
+print(f"Prepare response: {response.json()}")
+
+# Step 3: Activate
+print("Activating session...")
+response = requests.put(
+    f"{config_server}/application/v2/tenant/{tenant}/session/{session_id}/active"
+)
+
+print(f"Activate response: {response.json()}")
+
+# Step 4: Wait for convergence
+print("Waiting for services to converge...")
+converged = False
+while not converged:
+    response = requests.get(
+        f"{config_server}/application/v2/tenant/{tenant}/application/{app_name}/environment/prod/region/default/instance/default/serviceconverge",
+        params={"timeout": "30s"}
+    )
+    
+    result = response.json()
+    converged = result.get("converged", False)
+    
+    if not converged:
+        print("Waiting for convergence...")
+        time.sleep(5)
+
+print("Deployment complete!")
+```
+</CodeGroup>
+
+## Using Vespa CLI
+
+For most deployments, use the [Vespa CLI](https://docs.vespa.ai/en/vespa-cli.html) instead of calling the API directly:
+
+```bash
+# Deploy application
+vespa deploy
+
+# Wait for convergence
+vespa status
+
+# Deploy to Vespa Cloud
+vespa deploy --wait 300
+```
+
+## Error Handling
+
+### Common Errors
+
+| Status | Error | Solution |
+|--------|-------|----------|
+| 400 | Invalid application package | Check application package structure and validation errors |
+| 409 | Session already active | Session is already activated or being processed |
+| 412 | Preparation failed | Fix validation errors reported in response |
+| 504 | Timeout | Increase timeout parameter or check service health |
+
+**Error Response Example**
+
+```json
+{
+  "error-code": "BAD_REQUEST",
+  "message": "Invalid application package: Schema validation failed"
+}
+```
+
+## Security
+
+<Warning>
+In production environments, the Deploy API should be protected with authentication and restricted network access.
+</Warning>
+
+### Vespa Cloud
+
+Vespa Cloud automatically handles authentication via:
+- mTLS certificates for API access
+- Integration with CI/CD through API keys
+
+### Self-Hosted
+
+For self-hosted deployments:
+1. Use firewall rules to restrict access to port 19071
+2. Implement reverse proxy with authentication
+3. Use VPN for remote deployments
+
+## Related Documentation
+
+- [Vespa CLI](/api/clients/vespa-cli)
+- [Application Packages](/deployment/application-packages)
+- [Multinode Systems](/deployment/multinode-systems)
+- [Document v1 API](/api/document-v1)

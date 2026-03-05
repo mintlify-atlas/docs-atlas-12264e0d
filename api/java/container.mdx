@@ -1,0 +1,306 @@
+---
+title: jDisc Container
+description: The jDisc container provides the runtime environment for Vespa components
+---
+
+The jDisc container is Vespa's powerful runtime environment that hosts application components. It provides dependency injection, lifecycle management, and a flexible component model for building search and document processing applications.
+
+## Overview
+
+The jDisc container is the foundation of Vespa's extensibility. It manages:
+
+- **Component lifecycle** - Creation, initialization, and destruction
+- **Dependency injection** - Automatic wiring of component dependencies
+- **Request handling** - Routing requests to appropriate handlers
+- **Resource management** - Reference counting and cleanup
+
+## Container Architecture
+
+The container is immutable once created. Each reconfiguration produces a new container instance:
+
+```java
+public interface Container extends SharedResource, Timer {
+    /**
+     * Resolves a RequestHandler for the given request.
+     * Returns null if no match is found.
+     */
+    RequestHandler resolveHandler(Request request);
+
+    /**
+     * Gets an instance of the specified type from the container.
+     * Use dependency injection instead when possible.
+     */
+    <T> T getInstance(Class<T> type);
+}
+```
+
+Source: `jdisc_core/src/main/java/com/yahoo/jdisc/Container.java:30`
+
+## Component Lifecycle
+
+Components in the jDisc container follow a well-defined lifecycle:
+
+<Steps>
+  <Step title="Construction">
+    The container creates component instances using constructor injection. Dependencies are automatically resolved and injected.
+  </Step>
+  
+  <Step title="In Service">
+    Components handle requests from multiple threads in parallel. This phase lasts until the container is replaced during reconfiguration.
+  </Step>
+  
+  <Step title="Deconstruction">
+    When a new container is activated, the old container waits for all active requests to complete, then calls `deconstruct()` on components in reverse dependency order.
+  </Step>
+</Steps>
+
+## Dependency Injection
+
+The container uses constructor-based dependency injection:
+
+```java
+import com.yahoo.search.Searcher;
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.searchchain.Execution;
+
+public class MySearcher extends Searcher {
+    private final SomeService service;
+    private final SomeConfig config;
+
+    // Dependencies injected via constructor
+    @Inject
+    public MySearcher(SomeService service, SomeConfig config) {
+        this.service = service;
+        this.config = config;
+    }
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Use injected dependencies
+        String value = config.someParameter();
+        service.doSomething(value);
+        return execution.search(query);
+    }
+}
+```
+
+### Constructor Selection
+
+When multiple constructors exist, the container selects them in this priority order:
+
+1. Constructor with `ComponentId` + highest number of config parameters
+2. Constructor with `String` id + highest number of config parameters
+3. Constructor with only config parameters (highest number)
+4. Constructor with `ComponentId` only
+5. Constructor with `String` id only
+6. Default (no-argument) constructor
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:43`
+
+## Provider Pattern
+
+For advanced component creation, implement the `Provider` interface:
+
+```java
+import com.yahoo.container.di.componentgraph.Provider;
+
+public class MyServiceProvider implements Provider<MyService> {
+    private final SomeConfig config;
+
+    @Inject
+    public MyServiceProvider(SomeConfig config) {
+        this.config = config;
+    }
+
+    @Override
+    public MyService get() {
+        // Custom initialization logic
+        MyService service = new MyService();
+        service.configure(config.endpoint());
+        service.initialize();
+        return service;
+    }
+
+    @Override
+    public void deconstruct() {
+        // Cleanup resources
+    }
+}
+```
+
+Source: `component/src/main/java/com/yahoo/container/di/componentgraph/Provider.java:6`
+
+<Note>
+Providers are useful when:
+- Complex initialization logic is required
+- Resources need explicit cleanup
+- You want to provide a fallback component
+</Note>
+
+## Application Interface
+
+Applications implement the `Application` interface to control the container lifecycle:
+
+```java
+public interface Application {
+    /**
+     * Called when the application starts.
+     * Use this to activate the initial Container.
+     */
+    void start();
+
+    /**
+     * Called when the application is stopping.
+     * No new containers can be activated after this.
+     */
+    void stop();
+
+    /**
+     * Called after stop() and all containers have terminated.
+     * Use this to clean up resources.
+     */
+    void destroy();
+}
+```
+
+Source: `jdisc_core/src/main/java/com/yahoo/jdisc/application/Application.java:16`
+
+## Container Activation
+
+To create and activate a new container:
+
+```java
+import com.yahoo.jdisc.application.ContainerBuilder;
+import com.yahoo.jdisc.application.ContainerActivator;
+
+// Create a builder
+ContainerBuilder builder = containerActivator.newContainerBuilder();
+
+// Configure the container
+builder.serverBindings().bind("http://*/search/*", new SearchHandler());
+builder.clientBindings().bind("http://*/", new HttpClient());
+
+// Activate - this replaces the current container
+containerActivator.activateContainer(builder);
+```
+
+<Warning>
+Container activation is a critical operation. The old container continues serving requests until all ongoing requests complete, then it's deconstructed.
+</Warning>
+
+## Request Lifecycle
+
+Each request is attached to a container instance:
+
+1. **Request arrives** - The container resolves the appropriate `RequestHandler`
+2. **Processing** - The handler processes the request (searcher chain, document processor chain, etc.)
+3. **Release** - When `request.release()` is called, the container reference is released
+
+The container is kept alive as long as any request references it, preventing issues during reconfiguration.
+
+## Thread Safety
+
+Components must be thread-safe:
+
+- **Immutable state** - Prefer immutable data structures created in the constructor
+- **Read-only access** - Build data in constructor, access read-only afterwards
+- **Synchronization** - Only when absolutely necessary (impacts performance)
+
+```java
+public class ThreadSafeSearcher extends Searcher {
+    // Immutable - built in constructor, safe for concurrent access
+    private final Map<String, String> lookupTable;
+
+    public ThreadSafeSearcher(SomeConfig config) {
+        // Build immutable structures during construction
+        Map<String, String> temp = new HashMap<>();
+        for (var entry : config.entries()) {
+            temp.put(entry.key(), entry.value());
+        }
+        this.lookupTable = Collections.unmodifiableMap(temp);
+    }
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Safe concurrent read-only access
+        String value = lookupTable.get(query.properties().getString("key"));
+        return execution.search(query);
+    }
+}
+```
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:37`
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Constructor Injection">
+    Always use constructor injection rather than `getInstance()`. This makes dependencies explicit and testable.
+
+    ```java
+    // Good
+    public MyComponent(DependencyA a, DependencyB b) {
+        this.a = a;
+        this.b = b;
+    }
+
+    // Avoid
+    public MyComponent(Container container) {
+        this.a = container.getInstance(DependencyA.class);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Keep Constructors Fast">
+    Constructors block container reconfiguration. Avoid expensive operations like network calls or large file I/O.
+
+    ```java
+    // Good - quick initialization
+    public MyComponent(SomeConfig config) {
+        this.endpoint = config.endpoint();
+    }
+
+    // Bad - slow network operation
+    public MyComponent(SomeConfig config) {
+        this.data = fetchFromRemoteService(config.endpoint()); // Blocks!
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Implement Proper Cleanup">
+    Override `deconstruct()` to clean up resources like thread pools, connections, or file handles.
+
+    ```java
+    public class MyComponent extends AbstractComponent {
+        private final ExecutorService executor;
+
+        public MyComponent() {
+            this.executor = Executors.newFixedThreadPool(10);
+        }
+
+        @Override
+        public void deconstruct() {
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+            }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Make Components Thread-Safe">
+    Components serve multiple requests concurrently. Use immutable data structures and avoid mutable shared state.
+  </Accordion>
+</AccordionGroup>
+
+## Related APIs
+
+- [Searcher API](/api/java/searcher) - Search chain components
+- [Document Processor API](/api/java/document-processor) - Document processing components
+- [Component API](/api/java/component) - Base component interfaces

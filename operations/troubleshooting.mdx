@@ -1,0 +1,764 @@
+---
+title: Troubleshooting
+description: Debug common Vespa issues and resolve operational problems
+---
+
+This guide covers common Vespa operational issues, their symptoms, root causes, and solutions.
+
+## Diagnostic Approach
+
+<Steps>
+  <Step title="Identify Symptoms">
+    Gather error messages, metrics, and logs
+  </Step>
+  
+  <Step title="Check Service Health">
+    Verify all services are running:
+    ```bash
+    vespa-model-inspect services
+    curl http://localhost:19050/state/v1/health
+    ```
+  </Step>
+  
+  <Step title="Review Metrics">
+    Look for anomalies in key metrics
+  </Step>
+  
+  <Step title="Examine Logs">
+    Check logs for errors:
+    ```bash
+    vespa-logfmt -l all -f /opt/vespa/logs/vespa/vespa.log
+    ```
+  </Step>
+  
+  <Step title="Apply Fix">
+    Implement solution and verify resolution
+  </Step>
+</Steps>
+
+## Query Performance Issues
+
+### High Query Latency
+
+<Accordion title="Symptoms">
+- Slow query responses (> 1 second)
+- Increasing query latency over time
+- Timeout errors
+
+**Check these metrics:**
+```java
+QUERY_LATENCY                                    // Overall latency
+QUERY_CONTAINER_LATENCY                          // Container processing time
+CONTENT_PROTON_DOCUMENTDB_MATCHING_QUERY_LATENCY // Content node latency
+CONTENT_PROTON_DOCSUM_LATENCY                    // Document summary latency
+```
+</Accordion>
+
+<Accordion title="Common Causes and Solutions">
+
+**1. Inefficient Rank Profiles**
+```bash
+# Identify slow rank profiles
+curl http://localhost:19050/state/v1/metrics | \
+  jq '.metrics.values[] | select(.name | contains("rank_profile.query_latency"))'
+```
+
+Solution:
+```text
+rank-profile optimized {
+  first-phase {
+    expression: bm25(title)  # Fast first phase
+  }
+  second-phase {
+    expression: lightgbm("model.json")
+    rerank-count: 100  # Limit expensive reranking
+  }
+}
+```
+
+**2. Thread Pool Saturation**
+```java
+// Check for thread pool issues
+JDISC_THREAD_POOL_WORK_QUEUE_SIZE    // Growing queue
+JDISC_THREAD_POOL_REJECTED_TASKS     // Rejected requests
+CONTENT_PROTON_EXECUTOR_MATCH_QUEUESIZE  // Match queue depth
+```
+
+Solution:
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <requestthreads>
+        <count>16</count>  <!-- Increase threads -->
+      </requestthreads>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+**3. Large Result Sets**
+Symptom: Queries with hits=1000 are slow
+
+Solution:
+```
+# Limit result size
+/search/?query=foo&hits=100
+
+# Use pagination
+/search/?query=foo&hits=20&offset=20
+```
+
+**4. Expensive Grouping Operations**
+Solution: Optimize grouping queries:
+```
+# Before (slow)
+select * from sources * where true 
+  all(group(category) each(output(count())))
+
+# After (faster)
+select * from sources * where true 
+  all(group(category) max(100) each(output(count())))
+```
+</Accordion>
+
+### Query Errors
+
+<CodeGroup>
+```text Timeout Errors
+Error: Query timed out after 5000ms
+
+Check:
+- ERROR_TIMEOUT metric
+- CONTENT_PROTON_DOCUMENTDB_MATCHING_SOFT_DOOMED_QUERIES
+
+Solutions:
+1. Increase query timeout
+2. Optimize slow queries
+3. Add more content nodes
+```
+
+```text Backend Communication Errors
+Error: No backends in service
+
+Check:
+- ERROR_BACKENDS_OOS metric
+- Content node health: curl http://localhost:19050/state/v1/health
+
+Solutions:
+1. Verify content nodes are running
+2. Check network connectivity
+3. Review content node logs
+```
+
+```text Illegal Query Errors
+Error: Illegal query: ParseException
+
+Check:
+- ERROR_ILLEGAL_QUERY metric
+
+Solutions:
+1. Validate query syntax
+2. Check for special characters
+3. Review YQL query structure
+```
+</CodeGroup>
+
+## Feeding Issues
+
+### Slow Document Ingestion
+
+<Accordion title="Symptoms">
+- Low feed throughput (< 100 docs/sec on capable hardware)
+- High feed latency
+- Growing queue of pending operations
+
+**Check these metrics:**
+```java
+HTTPAPI_LATENCY              // Feed operation latency
+HTTPAPI_PENDING              // Pending operations
+HTTPAPI_QUEUED_OPERATIONS    // Queued operations
+HTTPAPI_FAILED_TIMEOUT       // Timeout failures
+```
+</Accordion>
+
+<Accordion title="Solutions">
+
+**1. Use Async Operations**
+```python
+import asyncio
+import aiohttp
+
+async def feed_document(session, doc):
+    async with session.post(
+        'http://localhost:8080/document/v1/namespace/doctype/docid',
+        json=doc,
+        params={'timeout': '180s'}
+    ) as response:
+        return await response.json()
+
+async def batch_feed(documents):
+    async with aiohttp.ClientSession() as session:
+        tasks = [feed_document(session, doc) for doc in documents]
+        results = await asyncio.gather(*tasks)
+        return results
+```
+
+**2. Check Resource Limits**
+```java
+// Monitor feeding blocked status
+CONTENT_PROTON_RESOURCE_USAGE_FEEDING_BLOCKED  // 1 = blocked
+CONTENT_PROTON_RESOURCE_USAGE_MEMORY
+CONTENT_PROTON_RESOURCE_USAGE_DISK
+```
+
+If feeding is blocked:
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <resource-limits>
+        <memory>0.90</memory>  <!-- Increase limit -->
+        <disk>0.85</disk>
+      </resource-limits>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+**3. Optimize Document Structure**
+- Remove unnecessary fields
+- Use appropriate field types
+- Enable compression for large text fields
+</Accordion>
+
+### Feed Failures
+
+<CodeGroup>
+```text Condition Not Met
+Error: Condition did not match document
+
+Metric: HTTPAPI_CONDITION_NOT_MET
+
+Cause: Test-and-set condition failed
+
+Solution:
+- Verify document exists
+- Check condition logic
+- Handle concurrent updates
+```
+
+```text Document Not Found
+Error: Document not found
+
+Metric: HTTPAPI_NOT_FOUND
+
+Cause: Update/remove on non-existent document
+
+Solution:
+- Verify document ID
+- Check if document was deleted
+- Use create=true for updates
+```
+
+```text Insufficient Storage
+Error: INSUFFICIENT_STORAGE
+
+Metric: HTTPAPI_FAILED_INSUFFICIENT_STORAGE
+
+Cause: Disk full or resource limits reached
+
+Solution:
+1. Free up disk space
+2. Add more nodes
+3. Remove old documents
+```
+</CodeGroup>
+
+## Memory Issues
+
+### High Memory Usage
+
+<Warning>
+**Critical Symptoms:**
+- Memory usage > 90%
+- Feeding blocked due to memory
+- Frequent GC pauses
+- OOM errors
+</Warning>
+
+<Steps>
+  <Step title="Identify Memory Consumers">
+    ```bash
+    # Check memory metrics
+    curl http://localhost:19050/state/v1/metrics | \
+      jq '.metrics.values[] | select(.name | contains("memory_usage"))'
+    ```
+    
+    Key metrics:
+    ```java
+    CONTENT_PROTON_DOCUMENTDB_MEMORY_USAGE_USED_BYTES
+    CONTENT_PROTON_DOCUMENTDB_ATTRIBUTE_MEMORY_USAGE_USED_BYTES
+    CONTENT_PROTON_DOCUMENTDB_INDEX_MEMORY_USAGE_USED_BYTES
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_MEMORY_USAGE_USED_BYTES
+    ```
+  </Step>
+  
+  <Step title="Check Attribute Usage">
+    Attributes are stored in memory. Large or high-cardinality attributes consume significant memory.
+    
+    ```bash
+    # Check attribute address space usage
+    curl http://localhost:19050/state/v1/metrics | \
+      jq '.metrics.values[] | select(.name == "content.proton.documentdb.attribute.resource_usage.address_space")'
+    ```
+  </Step>
+  
+  <Step title="Apply Solutions">
+    
+    **Reduce attribute memory:**
+    ```schema
+    schema product {
+      document product {
+        # Remove attribute from large fields
+        field description type string {
+          indexing: summary | index  # Don't use attribute
+        }
+        
+        # Use paged attributes for large datasets
+        field tags type array<string> {
+          indexing: summary | attribute
+          attribute: paged  # Store on disk, page into memory
+        }
+      }
+    }
+    ```
+    
+    **Increase memory limits:**
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <resource-limits>
+            <memory>0.90</memory>
+          </resource-limits>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+  </Step>
+</Steps>
+
+### JVM Memory Issues (Containers)
+
+<Accordion title="High GC Overhead">
+```java
+// Check GC metrics
+JDISC_GC_MS        // GC pause time
+JDISC_GC_COUNT     // GC frequency
+MEM_HEAP_USED      // Heap usage
+```
+
+**Symptoms:**
+- GC pauses > 500ms
+- GC consuming > 10% CPU
+- Heap consistently > 80% used
+
+**Solutions:**
+
+1. Increase heap size:
+```xml
+<container version="1.0" id="default">
+  <nodes>
+    <jvm options="-Xms16g -Xmx16g"/>
+  </nodes>
+</container>
+```
+
+2. Tune GC:
+```xml
+<jvm options="
+  -Xms16g -Xmx16g
+  -XX:+UseG1GC
+  -XX:MaxGCPauseMillis=200
+  -XX:InitiatingHeapOccupancyPercent=70
+"/>
+```
+
+3. Identify memory leaks:
+```bash
+# Generate heap dump
+jmap -dump:format=b,file=heap.bin <pid>
+
+# Analyze with MAT or VisualVM
+```
+</Accordion>
+
+## Disk Issues
+
+### Disk Full
+
+<Steps>
+  <Step title="Check Disk Usage">
+    ```java
+    CONTENT_PROTON_RESOURCE_USAGE_DISK                // Overall usage
+    CONTENT_PROTON_DOCUMENTDB_DISK_USAGE              // Per document DB
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_DISK_USAGE
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_DISK_BLOAT
+    CONTENT_PROTON_TRANSACTIONLOG_DISK_USAGE
+    ```
+  </Step>
+  
+  <Step title="Identify Causes">
+    
+    **High bloat:**
+    ```bash
+    # Check disk bloat
+    curl http://localhost:19050/state/v1/metrics | \
+      jq '.metrics.values[] | select(.name | contains("disk_bloat"))'
+    ```
+    
+    Bloat > 30% indicates inefficient storage.
+  </Step>
+  
+  <Step title="Apply Solutions">
+    
+    **1. Enable compression:**
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <summary>
+            <store>
+              <compression>
+                <type>lz4</type>
+                <level>9</level>
+              </compression>
+            </store>
+          </summary>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+    
+    **2. Trigger compaction:**
+    ```bash
+    # Compact document store
+    vespa-visit -v -s 'id.user==1234' --fieldset '[document]' > /dev/null
+    ```
+    
+    **3. Remove old documents:**
+    ```bash
+    # Remove documents by selection
+    curl -X DELETE 'http://localhost:8080/document/v1/namespace/doctype/docid?selection=timestamp<1640000000'
+    ```
+    
+    **4. Add more nodes:**
+    Scale horizontally to distribute data.
+  </Step>
+</Steps>
+
+### Slow Disk I/O
+
+<Accordion title="Symptoms and Solutions">
+**Symptoms:**
+- High query latency
+- Slow feed operations
+- High disk queue depth
+
+**Check:**
+```java
+CONTENT_PROTON_DOCUMENTDB_INDEX_IO_SEARCH_READ_BYTES
+CONTENT_PROTON_DOCUMENTDB_INDEX_IO_SEARCH_CACHED_READ_BYTES
+```
+
+**Solutions:**
+
+1. **Optimize cache usage:**
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Increase document store cache -->
+      <summary>
+        <store>
+          <cache>
+            <maxsize-percent>10</maxsize-percent>
+          </cache>
+        </store>
+      </summary>
+      
+      <!-- Increase index cache -->
+      <diskindexcache>
+        <size>4294967296</size>  <!-- 4GB -->
+      </diskindexcache>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+2. **Monitor cache hit rates:**
+```java
+CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_CACHE_HIT_RATE
+CONTENT_PROTON_INDEX_CACHE_POSTINGLIST_HIT_RATE
+```
+
+Target hit rate > 90%.
+
+3. **Use faster storage:**
+- NVMe SSDs for best performance
+- Ensure sufficient IOPS provisioned
+</Accordion>
+
+## Network Issues
+
+### Connection Timeouts
+
+<CodeGroup>
+```text Client to Container
+Symptom: Connection timeout to container
+
+Check:
+- Container service status
+- Network connectivity: ping <container-host>
+- Port accessibility: telnet <container-host> 8080
+
+Solution:
+- Verify container is running
+- Check firewall rules
+- Review load balancer configuration
+```
+
+```text Container to Content
+Symptom: Backend communication errors
+
+Metric: ERROR_BACKEND_COMMUNICATION_ERROR
+
+Check:
+- Content node status
+- Network latency: ping <content-node>
+- Service discovery: vespa-model-inspect services
+
+Solution:
+- Verify content nodes are healthy
+- Check network between nodes
+- Review cluster controller status
+```
+</CodeGroup>
+
+### High Connection Count
+
+```java
+// Monitor connections
+SERVER_NUM_OPEN_CONNECTIONS      // Current connections
+SERVER_CONNECTIONS_OPEN_MAX      // Peak connections
+SERVER_CONNECTION_DURATION_MEAN  // Average duration
+```
+
+**If connections are high:**
+
+1. Check for connection leaks in clients
+2. Tune connection timeouts:
+```xml
+<container version="1.0" id="default">
+  <http>
+    <server id="default" port="8080">
+      <config name="jdisc.http.connector">
+        <idleTimeout>30.0</idleTimeout>
+        <maxConnectionLife>300.0</maxConnectionLife>
+      </config>
+    </server>
+  </http>
+</container>
+```
+
+## Cluster State Issues
+
+### Node Down
+
+<Steps>
+  <Step title="Identify Down Node">
+    ```bash
+    vespa-model-inspect services
+    curl http://localhost:19050/state/v1/health
+    ```
+  </Step>
+  
+  <Step title="Check Node Logs">
+    ```bash
+    # On the affected node
+    vespa-logfmt -l all -f /opt/vespa/logs/vespa/vespa.log | tail -100
+    ```
+  </Step>
+  
+  <Step title="Common Issues">
+    
+    **Out of memory:**
+    ```
+    java.lang.OutOfMemoryError: Java heap space
+    ```
+    Solution: Increase heap size or reduce memory usage
+    
+    **Disk full:**
+    ```
+    No space left on device
+    ```
+    Solution: Free disk space or add capacity
+    
+    **Configuration error:**
+    ```
+    Config error: Invalid configuration
+    ```
+    Solution: Review and fix services.xml
+  </Step>
+  
+  <Step title="Restart Service">
+    ```bash
+    # Restart Vespa on the node
+    vespa-stop-services
+    vespa-start-services
+    ```
+  </Step>
+</Steps>
+
+### Split Brain / Cluster State Divergence
+
+<Warning>
+**Symptoms:**
+- Nodes report different cluster states
+- Inconsistent query results
+- Feed operations fail intermittently
+</Warning>
+
+**Solution:**
+
+1. Check cluster controller:
+```bash
+vespa-get-cluster-state
+```
+
+2. Force cluster state update:
+```bash
+vespa-set-node-state -c <cluster> -t storage -i <node> up
+```
+
+3. If issues persist, restart cluster controller
+
+## Performance Regression
+
+<Accordion title="Diagnosis Steps">
+
+**1. Compare metrics before/after:**
+```bash
+# Export current metrics
+curl http://localhost:19092/metrics/v2/values > metrics-current.json
+
+# Compare with baseline
+# Look for changes in:
+# - query_latency
+# - throughput (QPS)
+# - resource utilization
+# - error rates
+```
+
+**2. Review recent changes:**
+- Configuration changes
+- Schema modifications
+- Application updates
+- Infrastructure changes
+
+**3. Check resource saturation:**
+```java
+// CPU
+CPU
+CONTENT_PROTON_RESOURCE_USAGE_CPU_UTIL_READ
+CONTENT_PROTON_RESOURCE_USAGE_CPU_UTIL_WRITE
+
+// Memory
+MEM_HEAP_USED
+CONTENT_PROTON_RESOURCE_USAGE_MEMORY
+
+// Thread pools
+JDISC_THREAD_POOL_ACTIVE_THREADS
+CONTENT_PROTON_EXECUTOR_MATCH_UTILIZATION
+```
+
+**4. Profile queries:**
+```bash
+# Enable query tracing
+/search/?query=test&trace.level=5
+
+# Analyze trace output for bottlenecks
+```
+</Accordion>
+
+## Debugging Tools
+
+### Log Analysis
+
+```bash
+# Filter by log level
+vespa-logfmt -l error,warning -f /opt/vespa/logs/vespa/vespa.log
+
+# Filter by component
+vespa-logfmt -c searchnode -f /opt/vespa/logs/vespa/vespa.log
+
+# Follow logs in real-time
+vespa-logfmt -f -F /opt/vespa/logs/vespa/vespa.log
+```
+
+### Metric Queries
+
+```bash
+# Get specific metric
+curl http://localhost:19050/state/v1/metrics | \
+  jq '.metrics.values[] | select(.name == "query_latency")'
+
+# Get all metrics for a component
+curl http://localhost:19050/state/v1/metrics | \
+  jq '.metrics.values[] | select(.name | startswith("content.proton"))'
+```
+
+### Query Tracing
+
+```bash
+# Basic trace
+curl 'http://localhost:8080/search/?query=test&trace.level=2'
+
+# Detailed trace
+curl 'http://localhost:8080/search/?query=test&trace.level=5'
+
+# Trace specific components
+curl 'http://localhost:8080/search/?query=test&trace.rules=rank:5'
+```
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="Vespa Slack" icon="slack" href="https://vespatalk.slack.com">
+    Join the community for real-time help
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/vespa-engine/vespa/issues">
+    Report bugs and request features
+  </Card>
+  <Card title="Stack Overflow" icon="stack-overflow" href="https://stackoverflow.com/questions/tagged/vespa">
+    Search existing questions or ask new ones
+  </Card>
+  <Card title="Documentation" icon="book" href="https://docs.vespa.ai">
+    Browse official documentation
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up proactive monitoring
+  </Card>
+  <Card title="Tuning" icon="sliders" href="/operations/tuning">
+    Optimize performance
+  </Card>
+  <Card title="Scaling" icon="arrows-maximize" href="/operations/scaling">
+    Scale your cluster
+  </Card>
+</CardGroup>

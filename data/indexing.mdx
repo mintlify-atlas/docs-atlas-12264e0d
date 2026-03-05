@@ -1,0 +1,566 @@
+---
+title: Indexing and Document Processing
+description: Learn about Vespa's indexing language, document processors, and indexing pipeline
+---
+
+## Overview
+
+When documents are fed to Vespa, they go through an indexing pipeline that transforms and processes them before storage. The pipeline consists of:
+
+- **Indexing Language** - Declarative expressions for field transformations
+- **Document Processors** - Custom Java components for complex processing
+- **Indexing Pipeline** - The complete flow from ingestion to storage
+
+## Indexing Language
+
+The indexing language is a domain-specific language for transforming document fields during indexing.
+
+### Basic Syntax
+
+Define indexing statements in your schema:
+
+```
+schema music {
+    document music {
+        field title type string {
+            indexing: summary | index
+        }
+        
+        field artist type string {
+            indexing: summary | attribute
+        }
+        
+        field year type int {
+            indexing: summary | attribute
+        }
+    }
+}
+```
+
+### Indexing Expressions
+
+The indexing language supports various expressions for field manipulation:
+
+#### Input Expression
+
+Read a field value from the document:
+
+```
+field my_field type string {
+    indexing: input title | lowercase | index
+}
+```
+
+Reference: `indexinglanguage/src/main/java/com/yahoo/vespa/indexinglanguage/expressions/InputExpression.java:19`
+
+#### Output Expressions
+
+Specify where to store the processed value:
+
+<Accordion title="index">
+Store in memory index for full-text search:
+
+```
+field title type string {
+    indexing: input title | lowercase | index
+}
+```
+</Accordion>
+
+<Accordion title="attribute">
+Store in in-memory attribute for fast access, filtering, and sorting:
+
+```
+field year type int {
+    indexing: attribute
+}
+```
+</Accordion>
+
+<Accordion title="summary">
+Store in document summary for retrieval:
+
+```
+field description type string {
+    indexing: summary
+}
+```
+</Accordion>
+
+Reference: `indexinglanguage/src/main/java/com/yahoo/vespa/indexinglanguage/expressions/IndexExpression.java:7`
+
+### Transformation Expressions
+
+The indexing language provides 87+ built-in expressions for data transformation:
+
+<CodeGroup>
+
+```vespa Text Processing
+field normalized_title type string {
+    indexing: input title | lowercase | trim | normalize | index
+}
+
+field tokens type array<string> {
+    indexing: input text | tokenize | index
+}
+```
+
+```vespa Encoding
+field encoded_data type string {
+    indexing: input raw_data | base64encode | summary
+}
+
+field decoded_data type string {
+    indexing: input encoded | base64decode | summary
+}
+```
+
+```vespa Arithmetic
+field double_value type int {
+    indexing: input value * 2 | attribute
+}
+
+field price_with_tax type double {
+    indexing: input price * 1.2 | attribute
+}
+```
+
+```vespa Concatenation
+field full_name type string {
+    indexing: input first_name . " " . input last_name | summary
+}
+```
+
+</CodeGroup>
+
+### Common Expressions
+
+| Expression | Description | Example |
+|------------|-------------|----------|
+| `input` | Read field value | `input title` |
+| `lowercase` | Convert to lowercase | `lowercase` |
+| `tokenize` | Split into tokens | `tokenize` |
+| `normalize` | Unicode normalization | `normalize` |
+| `trim` | Remove whitespace | `trim` |
+| `index` | Store in index | `index` |
+| `attribute` | Store as attribute | `attribute` |
+| `summary` | Include in summary | `summary` |
+| `embed` | Generate embeddings | `embed embedder_name` |
+| `flatten` | Flatten nested structures | `flatten` |
+| `for_each` | Process array elements | `for_each { ... }` |
+
+### Control Flow
+
+#### Choice Expression
+
+Conditional processing based on field presence:
+
+```
+field display_title type string {
+    indexing: (input title || input name || "Untitled") | summary
+}
+```
+
+#### ForEach Expression
+
+Process array elements:
+
+```
+field normalized_tags type array<string> {
+    indexing: input tags | for_each { lowercase | trim } | index
+}
+```
+
+### Script Expressions
+
+Chain multiple operations:
+
+```
+field processed_text type string {
+    indexing: input raw_text | 
+              lowercase | 
+              trim | 
+              tokenize | 
+              normalize | 
+              index | 
+              summary
+}
+```
+
+### Embedding Generation
+
+Generate embeddings during indexing:
+
+```
+schema doc {
+    document doc {
+        field text type string {
+            indexing: summary | index
+        }
+    }
+    
+    field embedding type tensor<float>(x[384]) {
+        indexing: input text | embed embedder | attribute
+    }
+}
+```
+
+<Note>
+The `embed` expression requires configuring an embedder in your services.xml.
+</Note>
+
+## Document Processors
+
+Document processors are Java components that perform custom processing on documents before they're indexed.
+
+### Creating a Document Processor
+
+Extend `DocumentProcessor` and implement the `process` method:
+
+```java
+import com.yahoo.docproc.DocumentProcessor;
+import com.yahoo.docproc.Processing;
+import com.yahoo.document.DocumentPut;
+import com.yahoo.document.Document;
+
+public class MusicEnricherProcessor extends DocumentProcessor {
+    
+    @Override
+    public Progress process(Processing processing) {
+        for (DocumentOperation op : processing.getDocumentOperations()) {
+            if (op instanceof DocumentPut) {
+                DocumentPut put = (DocumentPut) op;
+                Document doc = put.getDocument();
+                
+                // Enrich document
+                enrichDocument(doc);
+            }
+        }
+        return Progress.DONE;
+    }
+    
+    private void enrichDocument(Document doc) {
+        String artist = (String) doc.getFieldValue("artist");
+        if (artist != null) {
+            // Add normalized artist field
+            doc.setFieldValue("artist_normalized", 
+                artist.toLowerCase().trim());
+        }
+    }
+}
+```
+
+Reference: `docproc/src/main/java/com/yahoo/docproc/DocumentProcessor.java:45`
+
+### Processing Return Values
+
+Document processors return a `Progress` value indicating the outcome:
+
+<CodeGroup>
+
+```java DONE
+// Processing completed successfully
+return Progress.DONE;
+```
+
+```java LATER
+// Request to be called again later (for async operations)
+return Progress.LATER;
+
+// Or with custom delay
+return Progress.later(100); // 100ms delay
+```
+
+```java FAILED
+// Processing failed, document should not be indexed
+return Progress.FAILED.withReason("Invalid document format");
+```
+
+```java PERMANENT_FAILURE
+// Critical failure, disable the processor
+return Progress.PERMANENT_FAILURE;
+```
+
+</CodeGroup>
+
+Reference: `docproc/src/main/java/com/yahoo/docproc/DocumentProcessor.java:108-150`
+
+### Accessing Document Operations
+
+The `Processing` object contains all document operations:
+
+```java
+import com.yahoo.docproc.Processing;
+import com.yahoo.document.DocumentOperation;
+import com.yahoo.document.DocumentPut;
+import com.yahoo.document.DocumentUpdate;
+import com.yahoo.document.DocumentRemove;
+
+@Override
+public Progress process(Processing processing) {
+    for (DocumentOperation op : processing.getDocumentOperations()) {
+        if (op instanceof DocumentPut) {
+            DocumentPut put = (DocumentPut) op;
+            processPut(put.getDocument());
+        } else if (op instanceof DocumentUpdate) {
+            DocumentUpdate update = (DocumentUpdate) op;
+            processUpdate(update);
+        } else if (op instanceof DocumentRemove) {
+            DocumentRemove remove = (DocumentRemove) op;
+            processRemove(remove.getId());
+        }
+    }
+    return Progress.DONE;
+}
+```
+
+Reference: `docproc/src/main/java/com/yahoo/docproc/Processing.java:204-207`
+
+### Context Variables
+
+Store and retrieve context data across processors:
+
+```java
+@Override
+public Progress process(Processing processing) {
+    // Set context variable
+    processing.setVariable("start_time", System.currentTimeMillis());
+    
+    // Get context variable
+    Long startTime = (Long) processing.getVariable("start_time");
+    
+    // Check if variable exists
+    if (processing.hasVariable("user_id")) {
+        String userId = (String) processing.getVariable("user_id");
+    }
+    
+    return Progress.DONE;
+}
+```
+
+Reference: `docproc/src/main/java/com/yahoo/docproc/Processing.java:140-176`
+
+### Asynchronous Processing
+
+For operations requiring external calls:
+
+```java
+import java.util.concurrent.CompletableFuture;
+
+public class AsyncEnricherProcessor extends DocumentProcessor {
+    
+    @Override
+    public Progress process(Processing processing) {
+        for (DocumentOperation op : processing.getDocumentOperations()) {
+            if (op instanceof DocumentPut) {
+                Document doc = ((DocumentPut) op).getDocument();
+                
+                // Check if already processed
+                if (processing.hasVariable("enriched_" + doc.getId())) {
+                    continue;
+                }
+                
+                // Start async enrichment
+                String artist = (String) doc.getFieldValue("artist");
+                CompletableFuture<ArtistInfo> future = 
+                    fetchArtistInfo(artist);
+                    
+                future.whenComplete((info, error) -> {
+                    if (error == null) {
+                        doc.setFieldValue("genre", info.getGenre());
+                        processing.setVariable("enriched_" + doc.getId(), true);
+                    }
+                });
+                
+                // Return LATER to be called again
+                return Progress.LATER;
+            }
+        }
+        return Progress.DONE;
+    }
+}
+```
+
+<Warning>
+When returning `Progress.LATER`, the processor will be called again. Ensure you track state to avoid infinite loops.
+</Warning>
+
+### Configuring Document Processors
+
+Define processors in `services.xml`:
+
+```xml
+<services version="1.0">
+    <container version="1.0" id="default">
+        <document-processing>
+            <chain id="default" inherits="indexing">
+                <documentprocessor id="com.example.MusicEnricherProcessor"/>
+                <documentprocessor id="com.example.ValidationProcessor"/>
+            </chain>
+        </document-processing>
+        
+        <nodes>
+            <node hostalias="node1"/>
+        </nodes>
+    </container>
+</services>
+```
+
+### Multiple Processing Chains
+
+Create different chains for different document types:
+
+```xml
+<document-processing>
+    <chain id="music-chain" inherits="indexing">
+        <documentprocessor id="com.example.MusicEnricherProcessor"/>
+    </chain>
+    
+    <chain id="user-chain" inherits="indexing">
+        <documentprocessor id="com.example.UserValidationProcessor"/>
+    </chain>
+</document-processing>
+```
+
+## Indexing Pipeline
+
+The complete indexing flow:
+
+<Steps>
+
+### Document Reception
+
+Vespa receives the document via feed client or HTTP API.
+
+### Document Processing
+
+Document processors in the chain execute sequentially:
+
+```
+Document → Processor 1 → Processor 2 → ... → Processor N
+```
+
+### Indexing Language Execution
+
+Field-level transformations defined in the schema are applied.
+
+### Storage
+
+Processed document is stored:
+- Fields marked `index` go to memory index
+- Fields marked `attribute` go to attribute storage
+- Fields marked `summary` go to document summary
+
+</Steps>
+
+## Error Handling
+
+Handle errors in document processors:
+
+```java
+@Override
+public Progress process(Processing processing) {
+    try {
+        for (DocumentOperation op : processing.getDocumentOperations()) {
+            validateOperation(op);
+        }
+        return Progress.DONE;
+    } catch (ValidationException e) {
+        log.warning("Validation failed: " + e.getMessage());
+        return Progress.FAILED.withReason(e.getMessage());
+    } catch (Exception e) {
+        log.severe("Unexpected error: " + e.getMessage());
+        return Progress.PERMANENT_FAILURE;
+    }
+}
+```
+
+## Timeouts
+
+Monitor and enforce timeouts:
+
+```java
+import java.time.Duration;
+
+@Override
+public Progress process(Processing processing) {
+    Duration timeLeft = processing.timeLeft();
+    
+    if (timeLeft.toMillis() < 1000) {
+        log.warning("Processing timeout approaching");
+        return Progress.TIMEOUT;
+    }
+    
+    // Process with remaining time
+    return Progress.DONE;
+}
+```
+
+Reference: `docproc/src/main/java/com/yahoo/docproc/Processing.java:232-237`
+
+## Best Practices
+
+<Steps>
+
+### Keep Indexing Expressions Simple
+
+Use indexing language for simple transformations. Move complex logic to document processors:
+
+```
+// Good: Simple transformation
+field title type string {
+    indexing: input title | lowercase | index
+}
+
+// Complex logic → Use document processor instead
+```
+
+### Make Processors Stateless
+
+Document processors must be thread-safe. Avoid mutable instance variables:
+
+```java
+public class SafeProcessor extends DocumentProcessor {
+    // Good: Immutable configuration
+    private final String apiEndpoint;
+    
+    // Bad: Mutable state
+    // private int counter;
+    
+    @Override
+    public Progress process(Processing processing) {
+        // Use local variables for state
+        int localCounter = 0;
+        return Progress.DONE;
+    }
+}
+```
+
+### Handle Async Operations Properly
+
+Track async operation state to avoid reprocessing:
+
+```java
+if (!processing.hasVariable("async_started")) {
+    // Start async operation
+    startAsyncOperation();
+    processing.setVariable("async_started", true);
+    return Progress.LATER;
+}
+```
+
+### Use Appropriate Progress Codes
+
+Return the correct progress code:
+- `DONE` - Processing complete
+- `LATER` - Need more time (async operation)
+- `FAILED` - This document failed (temporary)
+- `PERMANENT_FAILURE` - Critical error (disables processor)
+
+</Steps>
+
+## See Also
+
+- [Feeding Data](/data/feeding-data) - How to feed documents to Vespa
+- [Document API](/data/document-api) - Document operation details
+- [Updates and Deletes](/data/updates-deletes) - Partial updates and field operations

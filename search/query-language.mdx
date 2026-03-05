@@ -1,0 +1,236 @@
+---
+title: Query Language (YQL)
+description: Learn how to use Vespa Query Language (YQL) to express search queries
+---
+
+Vespa Query Language (YQL) is a SQL-like language used to express search queries in Vespa. YQL provides a powerful and flexible way to query your data with support for boolean operators, filters, and advanced search features.
+
+## Basic Syntax
+
+YQL queries follow this basic structure:
+
+```sql
+select <fields> from <sources> where <condition> [order by <fields>] [limit <n>] [offset <n>] [timeout <ms>]
+```
+
+### Simple Query Example
+
+```sql
+select * from sources * where title contains "vespa"
+```
+
+This query searches for documents where the `title` field contains the term "vespa".
+
+## Query Operators
+
+### Text Matching
+
+YQL supports multiple text matching operators:
+
+<CodeGroup>
+```sql Contains
+select * from sources * where title contains "search engine"
+```
+
+```sql Matches (Phrase)
+select * from sources * where title matches "search engine"
+```
+
+```sql Prefix
+select * from sources * where userQuery("sea*")
+```
+
+```sql Fuzzy
+select * from sources * where title contains ({prefix: true}"sea")
+```
+</CodeGroup>
+
+### Boolean Operators
+
+Combine multiple conditions using boolean operators:
+
+```sql
+select * from sources * where 
+  title contains "vespa" 
+  and description contains "search" 
+  or category contains "database"
+  and !(status contains "deprecated")
+```
+
+### Numeric and Range Queries
+
+```sql
+// Exact match
+select * from sources * where price = 100
+
+// Range query
+select * from sources * where range(price, 50, 200)
+
+// Less than / Greater than
+select * from sources * where price < 100 and rating > 4.5
+```
+
+## Field Selection
+
+Control which fields are returned in the results:
+
+```sql
+// Return all fields
+select * from sources *
+
+// Return specific fields
+select title, price, rating from sources *
+
+// Return document ID only
+select documentid from sources *
+```
+
+## Ordering and Pagination
+
+### Order By
+
+Sort results by one or more fields:
+
+```sql
+select * from sources * 
+where title contains "vespa" 
+order by price desc, rating asc
+```
+
+### Limit and Offset
+
+Paginate results:
+
+```sql
+select * from sources * 
+where title contains "vespa" 
+limit 20 offset 40
+```
+
+## Advanced Queries
+
+### WeakAnd for Large Result Sets
+
+Use `weakAnd` for efficient queries that match many documents:
+
+```sql
+select * from sources * 
+where weakAnd(title contains "vespa", description contains "search") 
+limit 10
+```
+
+From the source code (`container-search/src/main/java/com/yahoo/search/Query.java:44-46`):
+- YQL queries are parsed by `YqlParser`
+- Serialized using `VespaSerializer`
+- Support structured boolean trees and natural language text
+
+### Annotations
+
+Add query annotations for fine-grained control:
+
+```sql
+select * from sources * 
+where title contains ({stem: false, ranked: false}"Vespa")
+```
+
+<Note>
+Available annotations include:
+- `stem`: Control stemming (true/false)
+- `ranked`: Include term in ranking (true/false)
+- `prefix`: Enable prefix matching
+- `weight`: Set term weight
+</Note>
+
+## Embedded Queries
+
+### User Query
+
+Delegate query parsing to Vespa's query parser:
+
+```sql
+select * from sources * where userQuery()
+```
+
+This allows end-users to write simple queries without YQL syntax.
+
+### Combining with YQL
+
+```sql
+select * from sources * 
+where userQuery() and range(price, 0, 100)
+```
+
+## Timeout
+
+Set query timeout in milliseconds:
+
+```sql
+select * from sources * 
+where title contains "vespa" 
+timeout 5000
+```
+
+## Sources
+
+Specify which schemas/document types to query:
+
+```sql
+// Query all sources
+select * from sources *
+
+// Query specific schema
+select * from product
+
+// Query multiple schemas
+select * from sources product, review
+```
+
+## Grouping Integration
+
+YQL queries can include grouping operations (see [Grouping & Aggregation](/search/grouping-aggregation) for details):
+
+```sql
+select * from sources * 
+where title contains "vespa" 
+| all(group(category) each(output(count())))
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use specific sources">
+    Query specific schemas instead of `sources *` for better performance
+  </Step>
+  
+  <Step title="Add filters early">
+    Apply restrictive filters in the WHERE clause to reduce the result set
+  </Step>
+  
+  <Step title="Set appropriate limits">
+    Use reasonable `limit` values to avoid retrieving too many results
+  </Step>
+  
+  <Step title="Use weakAnd for large result sets">
+    When queries match many documents, `weakAnd` provides better performance than regular boolean operators
+  </Step>
+</Steps>
+
+## YQL Parser Implementation
+
+Vespa's YQL implementation (`container-search/src/main/java/com/yahoo/search/yql/YqlParser.java`) supports:
+
+- Multiple query item types: `WordItem`, `PhraseItem`, `AndItem`, `OrItem`, `NotItem`
+- Numeric operators: `IntItem`, `RangeItem`, `NumericInItem`
+- Advanced items: `NearestNeighborItem`, `FuzzyItem`, `RegExpItem`, `WeakAndItem`, `WandItem`
+- Geo-location queries: `GeoLocationItem`
+- Predicate queries: `PredicateQueryItem`
+
+<Warning>
+YQL queries are case-sensitive for field names and operators. Always use the exact field names defined in your schema.
+</Warning>
+
+## Next Steps
+
+- Learn about [Vector Search](/search/vector-search) with YQL
+- Explore [Text Search](/search/text-search) capabilities
+- Understand [Ranking Expressions](/search/ranking-expressions) to control result ordering

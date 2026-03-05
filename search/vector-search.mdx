@@ -1,0 +1,351 @@
+---
+title: Vector Search
+description: Implement approximate nearest neighbor search using HNSW indexing in Vespa
+---
+
+Vespa provides efficient vector search capabilities using Hierarchical Navigable Small World (HNSW) graphs for approximate K-nearest neighbor (ANN) search. This enables semantic search, recommendation systems, and similarity matching at scale.
+
+## Overview
+
+Vespa's vector search implementation (`searchlib/src/vespa/searchlib/tensor/hnsw_index.h:29-41`):
+
+> Implementation of a hierarchical navigable small world graph (HNSW) that is used for approximate K-nearest neighbor search.
+>
+> The implementation supports 1 write thread and multiple search threads without the use of mutexes.
+> This is achieved by using data stores that use generation tracking and associated memory management.
+>
+> The implementation is mainly based on the algorithms described in "Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs" (Yu. A. Malkov, D. A. Yashunin).
+
+## Defining Tensor Fields
+
+First, define a tensor field in your schema with HNSW indexing:
+
+```schema
+schema product {
+  document product {
+    field embedding type tensor<float>(x[384]) {
+      indexing: attribute | index
+      attribute {
+        distance-metric: angular
+      }
+      index {
+        hnsw {
+          max-links-per-node: 16
+          neighbors-to-explore-at-insert: 200
+        }
+      }
+    }
+  }
+}
+```
+
+### Distance Metrics
+
+Vespa supports multiple distance metrics:
+
+<Accordion title="angular (Cosine Distance)">
+Computes the angular distance between vectors. Best for normalized embeddings.
+
+```schema
+attribute {
+  distance-metric: angular
+}
+```
+</Accordion>
+
+<Accordion title="prenormalized-angular">
+Optimized for pre-normalized vectors. From the test schema (`config-model/src/test/derived/hnsw_index/test.sd:4-16`):
+
+```schema
+field t1 type tensor(x[128]) {
+  indexing: attribute | index
+  attribute {
+    distance-metric: prenormalized-angular
+  }
+  index {
+    hnsw {
+      max-links-per-node: 32
+      neighbors-to-explore-at-insert: 300
+      multi-threaded-indexing: false
+    }
+  }
+}
+```
+</Accordion>
+
+<Accordion title="euclidean">
+Computes Euclidean (L2) distance between vectors.
+
+```schema
+attribute {
+  distance-metric: euclidean
+}
+```
+</Accordion>
+
+<Accordion title="geodegrees">
+For geographic coordinates (latitude, longitude). From test schema (`config-model/src/test/derived/hnsw_index/test.sd:17-23`):
+
+```schema
+field t2 type tensor(x[2]) {
+  indexing: attribute
+  attribute {
+    distance-metric: geodegrees
+  }
+}
+```
+</Accordion>
+
+<Accordion title="dotproduct">
+Computes inner product. Useful for learned embeddings with specific properties.
+
+```schema
+attribute {
+  distance-metric: dotproduct
+}
+```
+</Accordion>
+
+## HNSW Configuration
+
+### max-links-per-node
+
+Controls the connectivity of the graph. Higher values improve recall but increase memory usage and indexing time.
+
+```schema
+index {
+  hnsw {
+    max-links-per-node: 16  // Default: 16, typical range: 8-32
+  }
+}
+```
+
+### neighbors-to-explore-at-insert
+
+Number of neighbors to consider during document insertion. Higher values improve index quality but slow down indexing.
+
+```schema
+index {
+  hnsw {
+    neighbors-to-explore-at-insert: 200  // Default: 200, typical range: 100-500
+  }
+}
+```
+
+### multi-threaded-indexing
+
+Enable parallel indexing for faster bulk loading:
+
+```schema
+index {
+  hnsw {
+    multi-threaded-indexing: true  // Default: true
+  }
+}
+```
+
+## Querying with nearestNeighbor
+
+Use the `nearestNeighbor` query operator in YQL:
+
+<CodeGroup>
+```sql Basic Query
+select * from sources product 
+where {targetHits: 10}nearestNeighbor(embedding, query_embedding)
+```
+
+```sql With Filters
+select * from sources product 
+where 
+  {targetHits: 10}nearestNeighbor(embedding, query_embedding)
+  and category contains "electronics"
+  and price < 1000
+```
+
+```sql With Approximate Parameter
+select * from sources product 
+where {targetHits: 10, approximate: true}nearestNeighbor(embedding, query_embedding)
+```
+</CodeGroup>
+
+From the Java DSL implementation (`client/src/main/java/ai/vespa/client/dsl/Field.java`):
+
+```java
+public Query nearestNeighbor(String rankFeature) {
+    return common("nearestNeighbor", annotation, (Object) rankFeature);
+}
+
+public Query nearestNeighbor(Annotation annotation, String rankFeature) {
+    return common("nearestNeighbor", annotation, (Object) rankFeature);
+}
+```
+
+## Query Parameters
+
+### targetHits
+
+Number of approximate nearest neighbors to return:
+
+```sql
+{targetHits: 100}nearestNeighbor(embedding, query_embedding)
+```
+
+<Note>
+`targetHits` controls the recall-performance tradeoff. Higher values improve recall but increase query latency.
+</Note>
+
+### approximate
+
+Control whether to use approximate or exact search:
+
+```sql
+// Approximate search (fast, default)
+{approximate: true}nearestNeighbor(embedding, query_embedding)
+
+// Exact search (slower but perfect recall)
+{approximate: false}nearestNeighbor(embedding, query_embedding)
+```
+
+### hnsw.exploreAdditionalHits
+
+Fine-tune the search quality:
+
+```sql
+{targetHits: 10, hnsw.exploreAdditionalHits: 50}nearestNeighbor(embedding, query_embedding)
+```
+
+## Embedding Integration
+
+Vespa can automatically generate embeddings using the `Embedder` interface:
+
+### Schema Configuration
+
+```schema
+schema product {
+  document product {
+    field title type string {
+      indexing: summary | index
+    }
+    
+    field embedding type tensor<float>(x[384]) {
+      indexing: input title | embed | attribute | index
+      attribute {
+        distance-metric: angular
+      }
+      index {
+        hnsw {
+          max-links-per-node: 16
+          neighbors-to-explore-at-insert: 200
+        }
+      }
+    }
+  }
+}
+```
+
+### Query-Time Embedding
+
+Embed query text automatically:
+
+```sql
+select * from sources product 
+where {targetHits: 10}nearestNeighbor(embedding, query_embedding)
+```
+
+Pass the query text via `input.query(query_embedding)` parameter:
+
+```http
+POST /search/
+{
+  "yql": "select * from product where {targetHits: 10}nearestNeighbor(embedding, query_embedding)",
+  "input.query(query_embedding)": "semantic search engine"
+}
+```
+
+## Hybrid Search
+
+Combine vector search with text search and filters:
+
+```sql
+select * from sources product 
+where 
+  (
+    {targetHits: 100}nearestNeighbor(embedding, query_embedding)
+    or title contains "laptop"
+  )
+  and price < 2000
+  and in_stock = true
+order by relevance desc
+limit 20
+```
+
+## Distance Calculation Features
+
+Access distance scores in ranking expressions:
+
+```schema
+rank-profile semantic {
+  first-phase {
+    expression: closeness(field, embedding)
+  }
+}
+```
+
+The `closeness` feature (`searchlib/src/vespa/searchlib/features/closenessfeature.h`) provides normalized distance scores.
+
+## Performance Tuning
+
+<Steps>
+  <Step title="Choose appropriate max-links-per-node">
+    Start with 16, increase to 32 for better recall on large datasets
+  </Step>
+  
+  <Step title="Tune targetHits">
+    Use 2-5x your desired result count for good recall-latency balance
+  </Step>
+  
+  <Step title="Use pre-normalized embeddings">
+    When using `angular` distance, normalize vectors and use `prenormalized-angular` for better performance
+  </Step>
+  
+  <Step title="Enable multi-threaded indexing">
+    For bulk loading, enable `multi-threaded-indexing: true`
+  </Step>
+  
+  <Step title="Apply filters after vector search">
+    Use `targetHits` to get candidates, then apply filters for efficiency
+  </Step>
+</Steps>
+
+## Memory Usage
+
+HNSW index memory usage depends on:
+- Number of documents
+- Vector dimensions
+- `max-links-per-node` setting
+
+Approximate formula:
+```
+memory ≈ num_docs × dimensions × 4 bytes + num_docs × max-links-per-node × 8 bytes
+```
+
+<Warning>
+HNSW indexes require significant memory. For a 1M document collection with 384-dimensional float vectors and 16 links per node:
+- Vector data: ~1.5 GB
+- HNSW graph: ~128 MB
+- Total: ~1.6 GB
+</Warning>
+
+## Best Practices
+
+1. **Normalize embeddings** when using angular distance
+2. **Use appropriate distance metrics** for your embedding model
+3. **Start with default HNSW parameters** and tune based on metrics
+4. **Monitor recall metrics** to ensure search quality
+5. **Combine with filters** for better result relevance
+
+## Next Steps
+
+- Learn about [Ranking Expressions](/search/ranking-expressions) to combine vector and text signals
+- Explore [Text Search](/search/text-search) for hybrid search
+- Read about [Grouping & Aggregation](/search/grouping-aggregation) for result organization

@@ -1,0 +1,309 @@
+---
+title: Vespa CLI
+description: Command-line interface for Vespa operations
+---
+
+The Vespa CLI is a powerful command-line tool for deploying, managing, and querying Vespa applications. It provides a unified interface for both local development and cloud deployments.
+
+## Installation
+
+The Vespa CLI is distributed as a standalone binary:
+
+<CodeGroup>
+```bash macOS (Homebrew)
+brew install vespa-cli
+```
+
+```bash Linux
+# Download the latest release
+curl -L https://github.com/vespa-engine/vespa/releases/latest/download/vespa-cli_linux_amd64.tar.gz | tar xz
+sudo mv vespa /usr/local/bin/
+```
+
+```bash Windows
+# Download from GitHub releases
+# https://github.com/vespa-engine/vespa/releases
+```
+</CodeGroup>
+
+## Core Commands
+
+### Deploy Application
+
+Deploy an application package to Vespa:
+
+```bash
+# Deploy to local instance
+vespa deploy .
+
+# Deploy to Vespa Cloud
+vespa deploy -t cloud
+
+# Deploy to specific zone
+vespa deploy -t cloud -z dev.aws-us-east-1c
+```
+
+The `deploy` command performs both prepare and activate operations. You can also run them separately:
+
+```bash
+# Prepare application (local only)
+vespa prepare myapp/
+
+# Activate prepared application
+vespa activate
+```
+
+<Note>
+When deploy returns successfully, the application has been validated and activated on config servers. The process of applying it on individual nodes may still be in progress.
+</Note>
+
+### Document Operations
+
+Perform single document operations:
+
+```bash
+# Put a document
+vespa document put id:music:song::123 song.json
+
+# Put with inline data
+vespa document put id:music:song::123 --data '{"fields":{"title":"Hello"}}'
+
+# Get a document
+vespa document get id:music:song::123
+
+# Update a document
+vespa document update id:music:song::123 update.json
+
+# Remove a document
+vespa document remove id:music:song::123
+```
+
+Document operations are synchronous and return only after the operation is visible.
+
+### Bulk Feeding
+
+For high-throughput feeding, use the `feed` command:
+
+```bash
+# Feed from file
+vespa feed documents.jsonl
+
+# Feed from multiple files
+vespa feed docs1.json docs2.json docs3.jsonl
+
+# Feed from stdin
+cat documents.jsonl | vespa feed -
+
+# Configure connections and parallelism
+vespa feed documents.jsonl --connections 16 --inflight 256
+```
+
+<Accordion title="Feed Options">
+- `--connections`: Number of HTTP/2 connections (default: 8)
+- `--inflight`: Target number of inflight requests (default: auto)
+- `--compression`: Compression mode - `auto`, `gzip`, or `none` (default: auto)
+- `--timeout`: Individual operation timeout in seconds (default: 0 for no timeout)
+- `--verbose`: Print all operations, not just errors
+- `--progress`: Print stats at given interval in seconds
+</Accordion>
+
+The feed command prints detailed metrics after completion:
+
+```json
+{
+  "feeder.operation.count": 1000000,
+  "feeder.seconds": 120.5,
+  "feeder.ok.count": 999950,
+  "feeder.ok.rate": 8298.340,
+  "feeder.error.count": 50,
+  "http.request.count": 1000050,
+  "http.request.bytes": 5242880000,
+  "http.request.MBps": 43.520,
+  "http.response.latency.millis.min": 5,
+  "http.response.latency.millis.avg": 28,
+  "http.response.latency.millis.max": 450
+}
+```
+
+### Query
+
+Execute queries against your Vespa application:
+
+```bash
+# Simple query
+vespa query 'select * from music where artist contains "beatles"'
+
+# Query with parameters
+vespa query 'yql=select * from music where artist contains "beatles"' hits=10
+
+# Query from JSON file
+vespa query --file query.json
+
+# Show equivalent curl command
+vespa query --verbose 'select * from music'
+
+# Plain output (no formatting)
+vespa query --format=plain 'select * from music'
+```
+
+### Status
+
+Check status of your Vespa deployment:
+
+```bash
+# Check all endpoints
+vespa status
+
+# Check specific cluster
+vespa status --cluster music
+
+# Wait for services to be ready
+vespa status --wait 300
+
+# Check deployment convergence
+vespa status deployment
+
+# Check deployment with specific run ID (cloud)
+vespa status deployment 12345
+
+# JSON output
+vespa status --format json
+```
+
+### Authentication
+
+Manage authentication for Vespa Cloud:
+
+```bash
+# Log in to Vespa Cloud
+vespa auth login
+
+# Show authentication status
+vespa auth show
+
+# Log out
+vespa auth logout
+
+# Manage API keys (cloud)
+vespa api-key
+```
+
+For self-hosted deployments, use certificate-based authentication:
+
+```bash
+# Generate certificate
+vespa cert
+
+# Copy certificate to application package
+vespa deploy --add-cert
+```
+
+## Configuration
+
+The CLI stores configuration in `~/.vespa`:
+
+```bash
+# Set target (local or cloud)
+vespa config set target local
+vespa config set target cloud
+
+# Set application
+vespa config set application tenant.app.instance
+
+# Set cluster
+vespa config set cluster music
+
+# List configuration
+vespa config get
+```
+
+## Advanced Usage
+
+### Custom Endpoints
+
+Connect to custom Vespa endpoints:
+
+```bash
+# Set custom target
+vespa config set target https://my-vespa.example.com:8080
+
+# Query custom endpoint
+vespa query --target https://endpoint.example.com 'select * from music'
+```
+
+### Logging and Debugging
+
+Get detailed information about operations:
+
+```bash
+# Verbose mode for queries
+vespa query --verbose 'select * from music'
+
+# Show logs
+vespa log --follow
+
+# Set log level for deploy
+vespa deploy --log-level info
+```
+
+### Network Speed Test
+
+Test network throughput to your cluster:
+
+```bash
+# Run speed test with 1KB payload
+vespa feed --speedtest 1024 --speedtest-duration 30
+```
+
+## CLI Source Reference
+
+The Vespa CLI is written in Go. Key command implementations:
+
+- Deploy: `client/go/internal/cli/cmd/deploy.go:21`
+- Document: `client/go/internal/cli/cmd/document.go:183`  
+- Feed: `client/go/internal/cli/cmd/feed.go:61`
+- Query: `client/go/internal/cli/cmd/query.go:43`
+- Status: `client/go/internal/cli/cmd/status.go:21`
+
+## Best Practices
+
+<Steps>
+  <Step title="Use feed for bulk operations">
+    For loading large datasets, always use `vespa feed` instead of individual `document put` commands. The feed command is optimized for high throughput with parallel connections and automatic throttling.
+  </Step>
+  
+  <Step title="Configure appropriate parallelism">
+    Start with default settings and adjust based on your cluster size:
+    - Small clusters (< 5 nodes): 8-16 connections
+    - Medium clusters (5-20 nodes): 16-32 connections  
+    - Large clusters (> 20 nodes): 32-64 connections
+  </Step>
+  
+  <Step title="Monitor feed metrics">
+    Use `--progress` flag to monitor feed progress and identify bottlenecks:
+    ```bash
+    vespa feed docs.jsonl --progress 10
+    ```
+  </Step>
+  
+  <Step title="Use compression for large documents">
+    The default `auto` compression setting works well for most cases. It compresses documents larger than 1KB automatically.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Java Feed Client" icon="java" href="/api/clients/feed-client">
+    High-performance Java client for bulk feeding
+  </Card>
+  <Card title="Document API" icon="file" href="/api/document">
+    Document JSON format and operations
+  </Card>
+  <Card title="Query API" icon="magnifying-glass" href="/api/search-api">
+    Query API reference
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment/application-packages">
+    Application deployment guide
+  </Card>
+</CardGroup>

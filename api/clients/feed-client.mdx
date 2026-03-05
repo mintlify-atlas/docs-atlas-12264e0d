@@ -1,0 +1,645 @@
+---
+title: Vespa Feed Client
+description: High-performance Java client for bulk feeding documents
+---
+
+The Vespa Feed Client is a high-performance Java library for feeding documents to Vespa over HTTP/2. It's optimized for throughput with automatic throttling, retries, and circuit breaking.
+
+## Overview
+
+The Feed Client provides:
+
+- **High throughput**: Optimized HTTP/2 multiplexing with automatic concurrency tuning
+- **Automatic retries**: Configurable retry logic for transient failures  
+- **Circuit breaking**: Fail-fast behavior when the cluster is struggling
+- **Async operations**: Non-blocking API with CompletableFuture
+- **Built-in metrics**: Detailed statistics about feed operations
+
+<Note>
+This is the recommended client for production Java applications that need to feed large volumes of data to Vespa.
+</Note>
+
+## Installation
+
+Add the Maven dependency:
+
+```xml pom.xml
+<dependency>
+  <groupId>com.yahoo.vespa</groupId>
+  <artifactId>vespa-feed-client</artifactId>
+  <version>${vespa.version}</version>
+</dependency>
+```
+
+For Gradle:
+
+```groovy build.gradle
+implementation 'com.yahoo.vespa:vespa-feed-client:${vespa.version}'
+```
+
+## Quick Start
+
+### Basic Setup
+
+Create a feed client:
+
+```java
+import ai.vespa.feed.client.*;
+import java.net.URI;
+import java.util.concurrent.CompletableFuture;
+
+public class FeedExample {
+    public static void main(String[] args) {
+        // Create client
+        FeedClient client = FeedClientBuilder.create(
+            URI.create("https://my-vespa-endpoint.com:8080")
+        ).build();
+        
+        try {
+            // Feed a document
+            DocumentId docId = DocumentId.of("music", "music", "song-1");
+            String json = "{\"fields\":{\"title\":\"Hello World\"}}";
+            
+            CompletableFuture<Result> promise = client.put(
+                docId, 
+                json, 
+                OperationParameters.empty()
+            );
+            
+            // Wait for result
+            Result result = promise.join();
+            System.out.println("Document fed: " + result.documentId());
+            
+        } finally {
+            client.close();
+        }
+    }
+}
+```
+
+### Multiple Endpoints
+
+Distribute load across multiple endpoints:
+
+```java
+List<URI> endpoints = List.of(
+    URI.create("https://node1.vespa.example.com:8080"),
+    URI.create("https://node2.vespa.example.com:8080"),
+    URI.create("https://node3.vespa.example.com:8080")
+);
+
+FeedClient client = FeedClientBuilder.create(endpoints)
+    .setConnectionsPerEndpoint(4)
+    .setMaxStreamPerConnection(128)
+    .build();
+```
+
+<Note>
+When providing multiple endpoints, each operation is sent to ONE endpoint (round-robin), not all of them. This is for feeding directly to container nodes without a load balancer.
+</Note>
+
+## Document Operations
+
+### Put Documents
+
+Insert or replace documents:
+
+```java
+DocumentId docId = DocumentId.of("music", "music", "123");
+
+String documentJson = """
+{
+  "fields": {
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "year": 1975
+  }
+}""";
+
+CompletableFuture<Result> promise = client.put(
+    docId,
+    documentJson,
+    OperationParameters.empty()
+);
+```
+
+### Update Documents
+
+Partial updates to existing documents:
+
+```java
+DocumentId docId = DocumentId.of("music", "music", "123");
+
+String updateJson = """
+{
+  "fields": {
+    "year": { "assign": 1975 },
+    "plays": { "increment": 1 }
+  }
+}""";
+
+CompletableFuture<Result> promise = client.update(
+    docId,
+    updateJson,
+    OperationParameters.empty()
+);
+```
+
+### Remove Documents
+
+Delete documents:
+
+```java
+DocumentId docId = DocumentId.of("music", "music", "123");
+
+CompletableFuture<Result> promise = client.remove(
+    docId,
+    OperationParameters.empty()
+);
+```
+
+## Operation Parameters
+
+Customize individual operations:
+
+```java
+import ai.vespa.feed.client.OperationParameters;
+import java.time.Duration;
+
+// Create parameters
+OperationParameters params = OperationParameters.empty()
+    .timeout(Duration.ofSeconds(30))
+    .route("music/default")        // Custom route
+    .tracelevel(5);                 // Enable tracing
+
+// Use in operation
+CompletableFuture<Result> promise = client.put(docId, json, params);
+```
+
+### Available Parameters
+
+<Accordion title="Operation Parameters">
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `timeout()` | Operation timeout | Client default |
+| `route()` | Target route | "default" |
+| `tracelevel()` | Trace level (0-9) | 0 |
+| `createIfNonExistent()` | Create on update if missing | true |
+| `testAndSetCondition()` | Conditional update expression | none |
+</Accordion>
+
+## Handling Results
+
+### Synchronous Waiting
+
+Wait for single operations:
+
+```java
+try {
+    Result result = promise.join();
+    System.out.println("Success: " + result.documentId());
+} catch (CompletionException e) {
+    if (e.getCause() instanceof FeedException) {
+        FeedException fe = (FeedException) e.getCause();
+        System.err.println("Feed failed: " + fe.getMessage());
+    }
+}
+```
+
+### Batch Waiting
+
+Wait for multiple operations:
+
+```java
+import java.util.*;
+
+List<CompletableFuture<Result>> promises = new ArrayList<>();
+
+// Submit many operations
+for (int i = 0; i < 10000; i++) {
+    DocumentId docId = DocumentId.of("music", "music", String.valueOf(i));
+    String json = String.format("{\"fields\":{\"id\":%d}}", i);
+    promises.add(client.put(docId, json, OperationParameters.empty()));
+}
+
+// Wait for all to complete
+try {
+    List<Result> results = FeedClient.await(promises);
+    System.out.println("All operations completed: " + results.size());
+} catch (MultiFeedException e) {
+    System.err.println("Some operations failed: " + e.getMessage());
+    e.getExceptions().forEach(ex -> {
+        System.err.println("  - " + ex.getMessage());
+    });
+}
+```
+
+### Async Processing
+
+Process results asynchronously:
+
+```java
+client.put(docId, json, OperationParameters.empty())
+    .thenAccept(result -> {
+        System.out.println("Success: " + result.documentId());
+    })
+    .exceptionally(ex -> {
+        System.err.println("Failed: " + ex.getMessage());
+        return null;
+    });
+```
+
+## Configuration
+
+### Connection Settings
+
+Optimize connection usage:
+
+```java
+FeedClient client = FeedClientBuilder.create(endpoint)
+    // Number of connections per endpoint
+    .setConnectionsPerEndpoint(8)
+    
+    // HTTP/2 streams per connection
+    .setMaxStreamPerConnection(128)
+    
+    // Connection recycling (0 = disabled)
+    .setConnectionTimeToLive(Duration.ofMinutes(30))
+    
+    .build();
+```
+
+<Accordion title="Connection Configuration Guidelines">
+Choose connection settings based on your cluster size:
+
+**Small cluster (1-5 nodes)**
+- Connections: 4-8
+- Streams: 64-128
+
+**Medium cluster (5-20 nodes)**  
+- Connections: 8-16
+- Streams: 128-256
+
+**Large cluster (20+ nodes)**
+- Connections: 16-32
+- Streams: 256-512
+
+Total inflight = connections × streams per connection
+</Accordion>
+
+### Retry Strategy
+
+Customize retry behavior:
+
+```java
+import ai.vespa.feed.client.FeedClient.RetryStrategy;
+import ai.vespa.feed.client.FeedClient.OperationType;
+
+class CustomRetryStrategy implements RetryStrategy {
+    @Override
+    public boolean retry(OperationType type) {
+        // Retry all operations except removes
+        return type != OperationType.REMOVE;
+    }
+    
+    @Override
+    public int retries() {
+        // Max 10 retries
+        return 10;
+    }
+}
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setRetryStrategy(new CustomRetryStrategy())
+    .build();
+```
+
+### Circuit Breaker
+
+Implement fail-fast behavior:
+
+```java
+import ai.vespa.feed.client.GracePeriodCircuitBreaker;
+import java.time.Duration;
+
+// Create circuit breaker
+var breaker = new GracePeriodCircuitBreaker(
+    Duration.ofSeconds(10),  // Start probing after 10s of failures
+    Duration.ofSeconds(20)   // Go OPEN after 20s of failures
+);
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setCircuitBreaker(breaker)
+    .build();
+
+// Check circuit breaker state
+CircuitBreaker.State state = client.circuitBreakerState();
+if (state == CircuitBreaker.State.OPEN) {
+    System.err.println("Circuit breaker is OPEN - cluster is struggling");
+}
+```
+
+<Accordion title="Circuit Breaker States">
+- **CLOSED**: Normal operation, all requests sent
+- **HALF_OPEN**: Probing with limited traffic to test recovery  
+- **OPEN**: Failing fast, no requests sent to protect cluster
+
+Transitions:
+- CLOSED → HALF_OPEN: After grace period of continuous failures
+- HALF_OPEN → CLOSED: After successful probes
+- HALF_OPEN → OPEN: After doom period if failures persist
+</Accordion>
+
+### SSL/TLS Configuration
+
+Configure mutual TLS:
+
+```java
+import java.nio.file.Path;
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setCertificate(
+        Path.of("/path/to/cert.pem"),
+        Path.of("/path/to/key.pem")
+    )
+    .setCaCertificatesFile(Path.of("/path/to/ca.pem"))
+    .build();
+```
+
+### Compression
+
+Configure request compression:
+
+```java
+import ai.vespa.feed.client.FeedClientBuilder.Compression;
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setCompression(Compression.auto)  // auto, gzip, or none
+    .build();
+```
+
+## Monitoring and Metrics
+
+### Feed Statistics
+
+Get real-time statistics:
+
+```java
+OperationStats stats = client.stats();
+
+System.out.println("Requests sent: " + stats.requests());
+System.out.println("Responses: " + stats.responses());
+System.out.println("Errors: " + stats.exceptions());
+System.out.println("Avg latency: " + stats.averageLatencyMillis() + "ms");
+System.out.println("Min latency: " + stats.minLatencyMillis() + "ms");
+System.out.println("Max latency: " + stats.maxLatencyMillis() + "ms");
+
+// Response code distribution
+stats.responsesByCode().forEach((code, count) -> {
+    System.out.println("  HTTP " + code + ": " + count);
+});
+```
+
+### Reset Statistics
+
+Filter out warmup operations:
+
+```java
+// Warmup phase
+for (int i = 0; i < 100; i++) {
+    client.put(docId, json, OperationParameters.empty()).join();
+}
+
+// Reset before real load
+client.resetStats();
+
+// Now run actual benchmark
+for (int i = 0; i < 100000; i++) {
+    client.put(docId, json, OperationParameters.empty());
+}
+
+OperationStats finalStats = client.stats();
+```
+
+## Complete Example
+
+Production-ready feed client:
+
+```java
+import ai.vespa.feed.client.*;
+import java.net.URI;
+import java.nio.file.*;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.*;
+
+public class ProductionFeeder {
+    
+    private final FeedClient client;
+    
+    public ProductionFeeder(URI endpoint, Path certFile, Path keyFile) {
+        // Configure circuit breaker
+        var breaker = new GracePeriodCircuitBreaker(
+            Duration.ofSeconds(10),
+            Duration.ofSeconds(30)
+        );
+        
+        // Create client with production settings
+        this.client = FeedClientBuilder.create(endpoint)
+            .setConnectionsPerEndpoint(16)
+            .setMaxStreamPerConnection(256)
+            .setConnectionTimeToLive(Duration.ofMinutes(30))
+            .setCertificate(certFile, keyFile)
+            .setCircuitBreaker(breaker)
+            .setCompression(FeedClientBuilder.Compression.auto)
+            .build();
+    }
+    
+    public void feedDocuments(Stream<Document> documents) {
+        List<CompletableFuture<Result>> promises = new ArrayList<>();
+        long startTime = System.currentTimeMillis();
+        
+        documents.forEach(doc -> {
+            DocumentId docId = DocumentId.of(
+                doc.namespace(),
+                doc.documentType(),
+                doc.id()
+            );
+            
+            CompletableFuture<Result> promise = client.put(
+                docId,
+                doc.toJson(),
+                OperationParameters.empty()
+            );
+            
+            promises.add(promise);
+            
+            // Print progress every 10000 operations
+            if (promises.size() % 10000 == 0) {
+                printProgress(promises.size(), startTime);
+            }
+        });
+        
+        // Wait for completion
+        try {
+            List<Result> results = FeedClient.await(promises);
+            printSummary(results.size(), startTime);
+        } catch (MultiFeedException e) {
+            System.err.println("Feed completed with errors: " + e.getMessage());
+            System.err.println("Failed operations: " + e.getExceptions().size());
+            throw e;
+        }
+    }
+    
+    private void printProgress(int count, long startTime) {
+        long elapsed = System.currentTimeMillis() - startTime;
+        double rate = count / (elapsed / 1000.0);
+        System.out.printf("Progress: %d documents (%.1f docs/sec)%n", 
+                         count, rate);
+    }
+    
+    private void printSummary(int count, long startTime) {
+        long elapsed = System.currentTimeMillis() - startTime;
+        double rate = count / (elapsed / 1000.0);
+        
+        OperationStats stats = client.stats();
+        
+        System.out.println("\n=== Feed Summary ===");
+        System.out.printf("Total documents: %d%n", count);
+        System.out.printf("Time elapsed: %.2f seconds%n", elapsed / 1000.0);
+        System.out.printf("Throughput: %.1f docs/sec%n", rate);
+        System.out.printf("Avg latency: %d ms%n", stats.averageLatencyMillis());
+        System.out.printf("Min latency: %d ms%n", stats.minLatencyMillis());
+        System.out.printf("Max latency: %d ms%n", stats.maxLatencyMillis());
+        System.out.println("\nResponse codes:");
+        stats.responsesByCode().forEach((code, count) -> 
+            System.out.printf("  %d: %d%n", code, count));
+    }
+    
+    public void close() {
+        client.close();
+    }
+    
+    // Document record
+    record Document(String namespace, String documentType, String id, String toJson) {}
+}
+```
+
+## Error Handling
+
+### Exception Types
+
+<Accordion title="FeedException">
+Base exception for all feed errors. Contains HTTP response details.
+
+```java
+try {
+    Result result = promise.join();
+} catch (CompletionException e) {
+    if (e.getCause() instanceof FeedException fe) {
+        System.err.println("HTTP " + fe.code() + ": " + fe.getMessage());
+    }
+}
+```
+</Accordion>
+
+<Accordion title="MultiFeedException">
+Thrown by `FeedClient.await()` when some operations fail.
+
+```java
+try {
+    FeedClient.await(promises);
+} catch (MultiFeedException e) {
+    e.getExceptions().forEach(ex -> {
+        System.err.println("Failed: " + ex.getMessage());
+    });
+}
+```
+</Accordion>
+
+### Retry Logic
+
+The client automatically retries:
+- **503 Service Unavailable**: Cluster overload
+- **Network errors**: Connection failures, timeouts
+- **Idempotent operations**: All operations by default
+
+Not retried:
+- **400 Bad Request**: Invalid document format
+- **404 Not Found**: Document type doesn't exist  
+- **412 Precondition Failed**: Test-and-set condition failed
+
+## Performance Tuning
+
+<Steps>
+  <Step title="Start with defaults">
+    The client auto-tunes concurrency. Start with default settings and measure throughput.
+  </Step>
+  
+  <Step title="Increase connections">
+    If CPU usage is low, increase connections:
+    ```java
+    .setConnectionsPerEndpoint(16)
+    .setMaxStreamPerConnection(256)
+    ```
+  </Step>
+  
+  <Step title="Monitor circuit breaker">
+    If the circuit breaker opens frequently, your cluster is overloaded. Scale up or reduce feed rate.
+  </Step>
+  
+  <Step title="Optimize document size">
+    Smaller documents = higher throughput. Consider:
+    - Removing unnecessary fields
+    - Compressing large text fields
+    - Using references for shared data
+  </Step>
+</Steps>
+
+## Best Practices
+
+<Warning>
+**Always close the client**
+
+Use try-with-resources or ensure `close()` is called:
+
+```java
+try (FeedClient client = FeedClientBuilder.create(endpoint).build()) {
+    // Feed operations
+}
+```
+
+Not closing the client may leak resources and prevent graceful shutdown.
+</Warning>
+
+<Note>
+**Reuse the client**
+
+Create one FeedClient per application, not per request. The client is thread-safe and maintains connection pools.
+</Note>
+
+## Source Reference
+
+Key implementation files:
+
+- `FeedClient` interface: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClient.java:22`
+- `FeedClientBuilder`: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClientBuilder.java:21`
+- HTTP implementation: `vespa-feed-client/src/main/java/ai/vespa/feed/client/impl/HttpFeedClient.java`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document API" icon="file" href="/api/document">
+    Document JSON format reference
+  </Card>
+  <Card title="Vespa CLI" icon="terminal" href="/api/clients/vespa-cli">
+    Command-line feeding tool
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="/operations/tuning">
+    Feed performance guide
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Monitoring and metrics
+  </Card>
+</CardGroup>

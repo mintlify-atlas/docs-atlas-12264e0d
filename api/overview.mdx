@@ -1,0 +1,228 @@
+---
+title: HTTP APIs Overview
+description: Overview of Vespa's HTTP APIs for document operations, search, and application deployment
+---
+
+Vespa provides a comprehensive set of HTTP APIs for interacting with your application. These APIs enable document management, search queries, and application deployment operations.
+
+## Available APIs
+
+Vespa exposes the following main HTTP APIs:
+
+<CardGroup cols={2}>
+  <Card title="Document v1 API" icon="file" href="/api/document-v1">
+    CRUD operations for documents
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api/search-api">
+    Query and retrieve documents
+  </Card>
+  <Card title="Deploy API" icon="cloud-arrow-up" href="/api/deploy-api">
+    Deploy and manage applications
+  </Card>
+</CardGroup>
+
+## Base URL Structure
+
+All Vespa HTTP APIs follow a consistent URL structure:
+
+```
+http://<host>:<port>/<api-path>
+```
+
+- **Document API**: `http://localhost:8080/document/v1/`
+- **Search API**: `http://localhost:8080/search/`
+- **Deploy API**: `http://localhost:19071/application/v2/`
+
+## Authentication
+
+Vespa supports multiple authentication mechanisms depending on your deployment:
+
+### Vespa Cloud
+
+For Vespa Cloud deployments, all API requests require authentication using:
+
+- **mTLS (Mutual TLS)**: Certificate-based authentication for production environments
+- **API Keys**: Token-based authentication for development and CI/CD
+
+```bash
+curl -H "Authorization: Bearer <api-key>" \
+  https://<endpoint>.vespa-app.cloud/search/?yql=...
+```
+
+### Self-Hosted Vespa
+
+For self-hosted deployments:
+
+- Authentication is optional and configured per container
+- Can integrate with custom authentication filters
+- Supports token-based authentication via custom handlers
+
+## Request Format
+
+### Content Types
+
+Vespa APIs support the following content types:
+
+- **JSON** (default): `application/json`
+- **CBOR**: `application/cbor` (binary JSON format for better performance)
+
+### Common Headers
+
+<ParamField header="Content-Type" type="string" default="application/json">
+  The MIME type of the request body
+</ParamField>
+
+<ParamField header="Accept" type="string" default="application/json">
+  The desired response format. Supports `application/json` or `application/cbor`
+</ParamField>
+
+## Response Format
+
+All API responses follow a consistent JSON structure:
+
+```json
+{
+  "pathId": "/document/v1/namespace/doctype/docid/1",
+  "id": "id:namespace:doctype::1",
+  "message": "Success"
+}
+```
+
+### Error Responses
+
+Error responses include detailed information:
+
+```json
+{
+  "pathId": "/document/v1/namespace/doctype/docid/1",
+  "message": "Document not found"
+}
+```
+
+<ResponseField name="pathId" type="string">
+  The request path that generated the response
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable message describing the result or error
+</ResponseField>
+
+## HTTP Status Codes
+
+Vespa uses standard HTTP status codes:
+
+| Status Code | Description |
+|-------------|-------------|
+| **200 OK** | Request succeeded |
+| **201 Created** | Document created successfully |
+| **400 Bad Request** | Invalid request format or parameters |
+| **404 Not Found** | Document or resource not found |
+| **412 Precondition Failed** | Test-and-set condition failed |
+| **429 Too Many Requests** | Rate limit exceeded or system overload |
+| **500 Internal Server Error** | Server-side error |
+| **504 Gateway Timeout** | Request timeout exceeded |
+| **507 Insufficient Storage** | No storage space available |
+
+## Timeouts
+
+All APIs support timeout configuration:
+
+<ParamField query="timeout" type="string" default="180s">
+  Request timeout in seconds or with unit suffix (e.g., `5s`, `1000ms`)
+</ParamField>
+
+```bash
+curl "http://localhost:8080/document/v1/mynamespace/music/docid/1?timeout=30s"
+```
+
+## Tracing
+
+Enable request tracing for debugging:
+
+<ParamField query="tracelevel" type="integer" default="0">
+  Trace level from 0 (off) to 9 (maximum detail)
+</ParamField>
+
+```bash
+curl "http://localhost:8080/search/?yql=...&tracelevel=5"
+```
+
+The trace information is included in the response:
+
+```json
+{
+  "trace": {
+    "children": [
+      {
+        "message": "Invoking chain 'default'"
+      }
+    ]
+  }
+}
+```
+
+## Rate Limiting
+
+Vespa implements automatic rate limiting to protect system stability:
+
+- **Document API**: Queue-based throttling with configurable limits
+- **Search API**: Thread pool saturation monitoring
+- **Deploy API**: Per-tenant rate limiting
+
+When rate limits are exceeded, the API returns HTTP 429 (Too Many Requests).
+
+## Performance Considerations
+
+### Best Practices
+
+1. **Batch Operations**: Use visitor operations for bulk reads instead of individual GET requests
+2. **Connection Reuse**: Use HTTP keep-alive and connection pooling
+3. **CBOR Format**: Use CBOR for better performance with large responses
+4. **Timeout Configuration**: Set appropriate timeouts based on operation complexity
+5. **Compression**: Enable HTTP compression for large payloads
+
+### Example: Connection Pooling
+
+```python
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+
+session = requests.Session()
+retries = Retry(total=3, backoff_factor=0.1)
+adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=20)
+session.mount('http://', adapter)
+
+response = session.get('http://localhost:8080/search/?yql=...')
+```
+
+## Monitoring and Metrics
+
+Vespa exposes API metrics through:
+
+- **Prometheus metrics**: Available at `/prometheus/v1/values`
+- **JSON metrics**: Available at `/state/v1/metrics`
+
+Key metrics to monitor:
+
+- `http.status.2xx`: Successful requests
+- `http.status.4xx`: Client errors
+- `http.status.5xx`: Server errors
+- `http.request.latency`: Request latency percentiles
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document v1 API" icon="file" href="/api/document-v1">
+    Learn about document CRUD operations
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api/search-api">
+    Explore query capabilities
+  </Card>
+  <Card title="Deploy API" icon="cloud-arrow-up" href="/api/deploy-api">
+    Deploy your applications
+  </Card>
+  <Card title="Query Language" icon="code" href="/search/query-language">
+    Learn YQL query syntax
+  </Card>
+</CardGroup>

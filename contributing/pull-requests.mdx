@@ -1,0 +1,207 @@
+---
+title: 'Pull Request Process'
+description: 'Learn how to create pull requests, get code reviews, and meet testing requirements for Vespa contributions'
+---
+
+This guide covers the pull request process for contributing to Vespa, including best practices, review requirements, and testing guidelines.
+
+## Creating a Pull Request
+
+### Commit Best Practices
+
+Please follow [best practices for creating git commits](https://github.com/trein/dev-best-practices/wiki/Git-Commit-Best-Practices):
+
+<Steps>
+  <Step title="Write Clear Commit Messages">
+    Use descriptive commit messages that explain what changes were made and why.
+    
+    ```bash
+    # Good
+    git commit -m "Add support for tensor slicing in ranking expressions"
+    
+    # Bad
+    git commit -m "fix bug"
+    ```
+  </Step>
+  
+  <Step title="Make Atomic Commits">
+    Each commit should represent a single logical change. Don't mix unrelated changes in one commit.
+  </Step>
+  
+  <Step title="Test Before Committing">
+    Ensure your changes build successfully and pass all relevant tests before creating a commit.
+  </Step>
+</Steps>
+
+### Submitting Your Pull Request
+
+When your code is ready to be submitted:
+
+1. Push your changes to a branch in your fork
+2. [Create a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request) against the Vespa repository
+3. Fill out the pull request template
+
+<Note>
+All pull requests include a license confirmation template that you must agree to.
+</Note>
+
+## Code Review Requirements
+
+### Reviewer Selection
+
+Every pull request must be approved by a [Vespa Committer](https://github.com/orgs/vespa-engine/people) who is different from the author.
+
+<Steps>
+  <Step title="Find the Right Reviewer">
+    Look for the `OWNERS` file upward in the source tree from where you're making changes. The OWNERS have special responsibility for their code areas.
+  </Step>
+  
+  <Step title="Request Review">
+    Request a review from an appropriate owner or committer familiar with the area of code you're modifying.
+  </Step>
+  
+  <Step title="Get Approval">
+    The reviewer can approve by:
+    - Clicking "Approve" in the GitHub UI
+    - Making a comment indicating agreement
+    - Merging the PR (approval can happen before or during merge)
+  </Step>
+</Steps>
+
+### Review Process
+
+<Accordion title="What Reviewers Look For">
+Reviewers evaluate:
+
+- **Code quality**: Is the code well-structured, readable, and maintainable?
+- **Correctness**: Does the code do what it's supposed to do?
+- **Testing**: Are there appropriate tests for the changes?
+- **API compatibility**: Do changes maintain backward compatibility (see [versioning](/contributing/versioning))?
+- **Documentation**: Are public APIs documented? Is the change documented if needed?
+- **Performance**: Are there any performance implications?
+</Accordion>
+
+<Accordion title="Handling Review Feedback">
+When you receive feedback:
+
+1. Address each comment thoughtfully
+2. Push new commits to your branch (they'll appear in the PR automatically)
+3. Reply to comments to explain your changes or reasoning
+4. Mark conversations as resolved when addressed
+5. Request re-review when ready
+</Accordion>
+
+### Approval Authority
+
+<Warning>
+Only **Vespa Committers** can approve and merge pull requests. The committer must be different from the PR author.
+</Warning>
+
+As a rule, approval should happen before merging, but this is not strictly required as the approver can revert if needed.
+
+## Testing Requirements
+
+### Building and Testing
+
+Before submitting your PR, ensure your changes build and pass tests:
+
+<CodeGroup>
+```bash Java Build
+# Build Java modules
+export MAVEN_OPTS="-Xms128m -Xmx1024m"
+mvn install --threads 1C
+```
+
+```bash Shell Tests
+# Run BATS tests for shell scripts
+export BATS_PLUGIN_PATH="$(npm root -g)"
+bats -r .
+```
+
+```bash Specific Test
+# Run a specific test file
+bats test_dir/test_name.bats
+```
+</CodeGroup>
+
+### ABI Compatibility Verification
+
+For Java APIs, ABI (Application Binary Interface) compatibility is automatically verified during the Maven build:
+
+<Note>
+The build will **fail** if you make incompatible changes to public APIs or if you add to public APIs without updating the ABI spec.
+</Note>
+
+If you need to add to public APIs:
+
+1. Ensure there's a good reason for the addition
+2. Update the ABI spec as instructed in the error message from the build
+
+See the [versioning guide](/contributing/versioning) for more details on API compatibility.
+
+### Continuous Integration
+
+All pull requests are automatically built and tested by Vespa's continuous integration system:
+
+- View build results at [factory.vespa.ai](https://factory.vespa.ai)
+- Builds must pass before merging
+- Failed builds will show details about what went wrong
+
+<Warning>
+Do not merge pull requests with failing CI builds unless you have a very good reason and explicit approval from a senior committer.
+</Warning>
+
+## Governance and Disputes
+
+Vespa follows a governance model defined in [GOVERNANCE.md](https://github.com/vespa-engine/vespa/blob/master/GOVERNANCE.md).
+
+### Decision Making
+
+<Note>
+While formal authority exists as a fallback, decisions are usually made by reaching **consensus based on technical merit**, with no regard to status or formal role.
+</Note>
+
+The community values:
+- Disagreement as healthy (diversity of perspectives leads to better decisions)
+- Technical arguments over formal authority
+- Building consensus through discussion
+
+### The Vespa Board
+
+The Vespa Board has final authority over all decisions, including:
+
+- Whether to merge (or keep) a PR in the event of any dispute
+- Who should be committers and board members
+- Changes to the governance policy
+
+The board consists of 4 people and makes decisions by majority vote:
+
+- Jon Bratseth (bratseth) - leader
+- Kristian Aune (kkraune)
+- Kim Johansen (johans1)
+- Frode Lundgren (frodelu)
+
+## Release Process
+
+<Note>
+Vespa releases the **master branch four times a week** (Monday through Thursday morning CET).
+</Note>
+
+This means:
+
+- Your merged PR will be in production within days
+- The master branch should always work
+- Test thoroughly before merging
+- Be available to help if issues arise after your change is released
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Versioning Guidelines" href="/contributing/versioning">
+    Learn about API compatibility and semantic versioning
+  </Card>
+  
+  <Card title="Contributing Guide" href="/contributing/guide">
+    Back to the main contributing guide
+  </Card>
+</CardGroup>

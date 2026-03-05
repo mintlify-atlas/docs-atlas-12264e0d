@@ -1,0 +1,447 @@
+---
+title: Document API
+description: Comprehensive guide to Vespa's Document API for put, get, update, and remove operations
+---
+
+## Overview
+
+The Document API provides programmatic access to read and write documents in Vespa. It supports four core operations:
+
+- **Put** - Add or replace a document
+- **Get** - Retrieve a document by ID
+- **Update** - Modify specific fields in a document
+- **Remove** - Delete a document
+
+## Document Operations
+
+Vespa provides both synchronous and asynchronous interfaces for document operations.
+
+### AsyncSession
+
+The `AsyncSession` interface provides high-throughput asynchronous access:
+
+```java
+import com.yahoo.documentapi.AsyncSession;
+import com.yahoo.documentapi.DocumentAccess;
+import com.yahoo.document.Document;
+import com.yahoo.document.DocumentId;
+import com.yahoo.document.DocumentPut;
+import com.yahoo.document.DocumentUpdate;
+
+DocumentAccess access = DocumentAccess.createDefault();
+AsyncSession session = access.createAsyncSession(new AsyncParameters());
+```
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:24`
+
+### Put Operation
+
+Add or completely replace a document:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.Document;
+import com.yahoo.document.DocumentType;
+
+// Create document
+DocumentType musicType = docTypeManager.getDocumentType("music");
+Document doc = new Document(musicType, "id:mynamespace:music::song1");
+doc.setFieldValue("title", "Bohemian Rhapsody");
+doc.setFieldValue("artist", "Queen");
+doc.setFieldValue("year", 1975);
+
+// Put document
+Result result = session.put(doc);
+if (result.isSuccess()) {
+    System.out.println("Document added successfully");
+}
+```
+
+```json JSON (HTTP)
+POST /document/v1/mynamespace/music/docid/song1
+
+{
+  "fields": {
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "year": 1975
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:37`
+
+### Put with Conditions
+
+Conditional puts using test-and-set:
+
+```java
+import com.yahoo.document.DocumentPut;
+import com.yahoo.documentapi.DocumentOperationParameters;
+import static com.yahoo.documentapi.DocumentOperationParameters.parameters;
+
+DocumentPut put = new DocumentPut(doc);
+put.setCondition(new TestAndSetCondition("music.year < 1980"));
+
+DocumentOperationParameters params = parameters()
+    .withResponseHandler(responseHandler);
+
+Result result = session.put(put, params);
+```
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:50-68`
+
+### Get Operation
+
+Retrieve a document by its ID:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.DocumentId;
+
+DocumentId id = new DocumentId("id:mynamespace:music::song1");
+Result result = session.get(id);
+
+// Process response asynchronously
+responseHandler.waitForResponse().ifPresent(response -> {
+    if (response instanceof DocumentResponse) {
+        DocumentResponse docResp = (DocumentResponse) response;
+        Document doc = docResp.getDocument();
+        if (doc != null) {
+            System.out.println("Title: " + doc.getFieldValue("title"));
+        }
+    }
+});
+```
+
+```bash HTTP
+GET /document/v1/mynamespace/music/docid/song1
+```
+
+</CodeGroup>
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:82`
+
+### Get with Field Set
+
+Retrieve only specific fields:
+
+```java
+import com.yahoo.documentapi.DocumentOperationParameters;
+
+DocumentOperationParameters params = parameters()
+    .withFieldSet("music:title,artist"); // Only fetch title and artist
+
+Result result = session.get(id, params);
+```
+
+<Note>
+Using field sets reduces network bandwidth and improves performance by fetching only needed fields.
+</Note>
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:97-99`
+
+### Update Operation
+
+Modify specific fields without replacing the entire document:
+
+```java
+import com.yahoo.document.DocumentUpdate;
+import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.document.Field;
+
+DocumentType musicType = docTypeManager.getDocumentType("music");
+DocumentUpdate update = new DocumentUpdate(musicType, "id:mynamespace:music::song1");
+
+// Assign new value to a field
+Field yearField = musicType.getField("year");
+FieldUpdate fieldUpdate = FieldUpdate.createAssign(yearField, 1975);
+update.addFieldUpdate(fieldUpdate);
+
+// Execute update
+Result result = session.update(update);
+```
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:162`
+
+### Update with Parameters
+
+Add conditions and options to updates:
+
+```java
+import com.yahoo.documentapi.DocumentOperationParameters;
+
+DocumentOperationParameters params = parameters()
+    .withCondition("music.year > 0")  // Only update if condition matches
+    .withCreateIfNonExistent(true)     // Create document if missing
+    .withResponseHandler(handler);
+
+Result result = session.update(update, params);
+```
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:177-179`
+
+### Remove Operation
+
+Delete a document:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.DocumentId;
+
+DocumentId id = new DocumentId("id:mynamespace:music::song1");
+Result result = session.remove(id);
+
+if (result.isSuccess()) {
+    System.out.println("Document removed");
+}
+```
+
+```bash HTTP
+DELETE /document/v1/mynamespace/music/docid/song1
+```
+
+</CodeGroup>
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:114`
+
+### Conditional Remove
+
+Remove only if a condition is met:
+
+```java
+import com.yahoo.document.DocumentRemove;
+
+DocumentRemove remove = new DocumentRemove(id);
+remove.setCondition(new TestAndSetCondition("music.year < 1970"));
+
+DocumentOperationParameters params = parameters();
+Result result = session.remove(remove, params);
+```
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:146-148`
+
+## Response Handling
+
+Document operations return responses asynchronously:
+
+```java
+import com.yahoo.documentapi.Response;
+import com.yahoo.documentapi.DocumentResponse;
+import com.yahoo.documentapi.RemoveResponse;
+import com.yahoo.documentapi.DocumentUpdateResponse;
+
+ResponseHandler handler = new ResponseHandler() {
+    @Override
+    public void handleResponse(Response response) {
+        if (response.isSuccess()) {
+            if (response instanceof DocumentResponse) {
+                DocumentResponse docResp = (DocumentResponse) response;
+                Document doc = docResp.getDocument();
+                // Process document
+            } else if (response instanceof DocumentUpdateResponse) {
+                DocumentUpdateResponse updateResp = (DocumentUpdateResponse) response;
+                System.out.println("Update successful");
+            } else if (response instanceof RemoveResponse) {
+                RemoveResponse removeResp = (RemoveResponse) response;
+                System.out.println("Document removed");
+            }
+        } else {
+            System.err.println("Operation failed: " + response.getTextMessage());
+        }
+    }
+};
+```
+
+## Document ID Structure
+
+Vespa document IDs follow a specific format:
+
+```
+id:<namespace>:<document-type>:<key-location>:<user-specific>
+```
+
+### ID Components
+
+<Accordion title="Namespace">
+Logical grouping for documents. Typically your application name.
+
+Example: `id:mynamespace:music::song1`
+</Accordion>
+
+<Accordion title="Document Type">
+Must match a document type defined in your schema.
+
+Example: `id:mynamespace:music::song1`
+</Accordion>
+
+<Accordion title="Key Location">
+Optional field for data distribution. Can be:
+- `n=<number>` - Numeric location
+- `g=<group>` - String-based grouping
+
+Example: `id:mynamespace:music:n=123:song1`
+</Accordion>
+
+<Accordion title="User Specific">
+Your unique identifier for the document.
+
+Example: `id:mynamespace:music::song1`
+</Accordion>
+
+### Document ID Examples
+
+```java
+// Simple ID
+new DocumentId("id:music:song::song1")
+
+// With numeric location (for co-locating related documents)
+new DocumentId("id:music:song:n=12345:song1")
+
+// With group location
+new DocumentId("id:music:song:g=rock:song1")
+```
+
+## Synchronous Session
+
+For simpler use cases, use `SyncSession` for blocking operations:
+
+```java
+import com.yahoo.documentapi.SyncSession;
+import com.yahoo.documentapi.SyncParameters;
+
+SyncSession session = access.createSyncSession(new SyncParameters.Builder().build());
+
+// Put document (blocks until complete)
+session.put(document);
+
+// Get document
+Document doc = session.get(id);
+if (doc != null) {
+    System.out.println("Found: " + doc.getId());
+}
+
+// Update document
+session.update(update);
+
+// Remove document
+boolean removed = session.remove(id);
+```
+
+<Warning>
+SyncSession blocks the calling thread. For high-throughput applications, use AsyncSession instead.
+</Warning>
+
+## Document Operation Parameters
+
+Customize operations with various parameters:
+
+```java
+import com.yahoo.documentapi.DocumentOperationParameters;
+import static com.yahoo.documentapi.DocumentOperationParameters.parameters;
+
+DocumentOperationParameters params = parameters()
+    .withPriority(DocumentProtocol.Priority.HIGH_1)  // Set priority
+    .withRoute("default")                             // Specify route
+    .withTimeout(30000)                               // Timeout in ms
+    .withCondition("music.year > 1970")              // Test-and-set condition
+    .withFieldSet("music:title,artist")              // Field set for get
+    .withTraceLevel(5);                              // Enable tracing
+
+session.put(document, params);
+```
+
+## Window Size and Flow Control
+
+The async session uses a window-based flow control mechanism:
+
+```java
+// Get current send window size
+double windowSize = session.getCurrentWindowSize();
+
+System.out.println("Current window size: " + windowSize);
+```
+
+The window size adjusts dynamically based on:
+- Latency of responses
+- Success/failure rate
+- Server back-pressure signals
+
+Reference: `documentapi/src/main/java/com/yahoo/documentapi/AsyncSession.java:186`
+
+## Error Handling
+
+Handle various error conditions:
+
+```java
+Result result = session.put(document);
+
+if (!result.isSuccess()) {
+    System.err.println("Operation failed: " + result.getError());
+    
+    switch (result.getError().getType()) {
+        case TRANSIENT:
+            // Retry operation
+            retry(document);
+            break;
+        case FATAL:
+            // Permanent error, don't retry
+            logError(document, result.getError());
+            break;
+    }
+}
+```
+
+## Best Practices
+
+<Steps>
+
+### Use Async Sessions for Throughput
+
+For high-volume feeding, always use `AsyncSession` to maximize throughput:
+
+```java
+AsyncSession session = access.createAsyncSession(new AsyncParameters());
+```
+
+### Batch Operations
+
+Send multiple operations without waiting for individual responses:
+
+```java
+for (Document doc : documents) {
+    session.put(doc);  // Don't wait for response
+}
+```
+
+### Set Appropriate Timeouts
+
+Configure timeouts based on your latency requirements:
+
+```java
+DocumentOperationParameters params = parameters()
+    .withTimeout(5000);  // 5 second timeout
+```
+
+### Use Field Sets to Minimize Data Transfer
+
+Fetch only required fields:
+
+```java
+DocumentOperationParameters params = parameters()
+    .withFieldSet("music:title,artist");
+session.get(id, params);
+```
+
+</Steps>
+
+## See Also
+
+- [Feeding Data](/data/feeding-data) - High-level feeding guide
+- [Updates and Deletes](/data/updates-deletes) - Partial update operations
+- [Document Processing](/data/indexing) - Document processors and indexing pipeline

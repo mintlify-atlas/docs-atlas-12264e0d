@@ -1,0 +1,336 @@
+---
+title: 'Documents'
+description: 'Understanding Vespa documents, fields, and document types'
+---
+
+Documents are the fundamental unit of data in Vespa. Each document represents an instance of an entity you want to store and search, such as an article, product, or user profile.
+
+## What is a Document?
+
+A document is an **identifiable set of value bindings** of a document type. Think of it as a structured record with:
+
+- A unique **document ID**
+- A **document type** defining its structure
+- A set of **fields** containing values
+
+<Note>
+Documents in Vespa are implemented in both Java and C++, allowing them to be used throughout the system from the container layer to content nodes.
+</Note>
+
+## Document Structure
+
+Here's the Java implementation showing the core document structure:
+
+```java
+package com.yahoo.document;
+
+public class Document extends StructuredFieldValue {
+    private DocumentId docId;
+    private Struct content;
+    private Long lastModified = null;
+    
+    /**
+     * Create a document with the given document type and identifier.
+     */
+    public Document(DocumentType docType, String id) {
+        this(docType, new DocumentId(id));
+    }
+    
+    public DocumentId getId() { 
+        return docId; 
+    }
+    
+    public FieldValue getFieldValue(Field field) {
+        return content.getFieldValue(field);
+    }
+}
+```
+
+*Source: [document/src/main/java/com/yahoo/document/Document.java:41](https://github.com/vespa-engine/vespa/blob/master/document/src/main/java/com/yahoo/document/Document.java#L41)*
+
+## Document ID
+
+Every document must have a unique identifier. Document IDs follow this format:
+
+```
+id:<namespace>:<document-type>:<key-value>
+```
+
+### Examples
+
+<CodeGroup>
+
+```text Simple ID
+id:music:song::love-is-here-to-stay
+```
+
+```text With Number
+id:shopping:product:n=123456
+```
+
+```text With Group
+id:commerce:order:g=electronics:order-789
+```
+
+</CodeGroup>
+
+<Warning>
+Document IDs are immutable. To change a document's ID, you must delete the old document and create a new one.
+</Warning>
+
+## Document Types
+
+A document type defines the structure and fields of documents. It's similar to a table schema in relational databases.
+
+```java
+public class DocumentType extends StructuredDataType {
+    private StructDataType contentStructType;
+    private List<DocumentType> inherits = new ArrayList<>(1);
+    
+    public DocumentType(String name) {
+        this(name, createContentStructType(name));
+    }
+    
+    public void addField(Field field) {
+        if (isRegistered()) {
+            throw new IllegalStateException(
+                "You cannot add fields to a document type that is already registered."
+            );
+        }
+        contentStructType.addField(field);
+    }
+}
+```
+
+*Source: [document/src/main/java/com/yahoo/document/DocumentType.java:34](https://github.com/vespa-engine/vespa/blob/master/document/src/main/java/com/yahoo/document/DocumentType.java#L34)*
+
+### Document Type Features
+
+<CardGroup cols={2}>
+  <Card title="Inheritance" icon="diagram-project">
+    Document types can inherit from other types
+  </Card>
+  <Card title="Field Sets" icon="layer-group">
+    Group fields for efficient partial updates
+  </Card>
+  <Card title="Struct Types" icon="cube">
+    Nested structured data within documents
+  </Card>
+  <Card title="Imported Fields" icon="file-import">
+    Reference fields from other document types
+  </Card>
+</CardGroup>
+
+## Fields
+
+Fields are the individual data elements within a document. Each field has:
+
+- A **name** (identifier)
+- A **data type** (string, int, tensor, etc.)
+- Optional **attributes** for indexing and storage behavior
+
+### Field Types
+
+<Accordion title="Primitive Types">
+  Basic scalar values:
+  - `string` - Text data
+  - `int`, `long` - Integer numbers
+  - `float`, `double` - Floating-point numbers
+  - `bool` - Boolean values
+  - `byte` - Single byte values
+</Accordion>
+
+<Accordion title="Complex Types">
+  Structured data:
+  - `array<T>` - Ordered collection of values
+  - `weightedset<T>` - Set with associated weights
+  - `map<K,V>` - Key-value pairs
+  - `tensor<T>(dimensions)` - Multi-dimensional arrays
+  - `struct` - Custom structured types
+</Accordion>
+
+<Accordion title="Reference Types">
+  Links to other documents:
+  - `reference<document-type>` - Link to another document
+</Accordion>
+
+## Working with Documents
+
+### Creating Documents
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.*;
+
+DocumentType docType = new DocumentType("music");
+Document doc = new Document(docType, "id:music:music::song-1");
+
+// Set field values
+Field titleField = docType.getField("title");
+doc.setFieldValue(titleField, new StringFieldValue("Love is Here to Stay"));
+```
+
+```python Python
+from vespa.application import Vespa
+
+app = Vespa(url="http://localhost:8080")
+
+document = {
+    "fields": {
+        "title": "Love is Here to Stay",
+        "artist": "Ella Fitzgerald",
+        "year": 1959
+    }
+}
+
+response = app.feed_data_point(
+    schema="music",
+    data_id="song-1",
+    fields=document["fields"]
+)
+```
+
+</CodeGroup>
+
+### Reading Documents
+
+```java
+public FieldValue getFieldValue(Field field) {
+    return content.getFieldValue(field);
+}
+
+public Field getField(String fieldName) {
+    Field field = content.getField(fieldName);
+    if (field == null) {
+        for(DocumentType parent : getDataType().getInheritedTypes()) {
+            field = parent.getField(fieldName);
+            if (field != null) break;
+        }
+    }
+    return field;
+}
+```
+
+*Source: [Document.java:165-176](https://github.com/vespa-engine/vespa/blob/master/document/src/main/java/com/yahoo/document/Document.java#L165)*
+
+### Document Operations
+
+<Steps>
+  <Step title="PUT">
+    Create or completely replace a document
+  </Step>
+  <Step title="UPDATE">
+    Modify specific fields without reading the entire document
+  </Step>
+  <Step title="GET">
+    Retrieve a document by its ID
+  </Step>
+  <Step title="DELETE">
+    Remove a document from the system
+  </Step>
+</Steps>
+
+## Document Serialization
+
+Vespa supports multiple serialization formats:
+
+### JSON Format
+
+```java
+public String toJson() {
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    JsonWriter writer = new JsonWriter(buffer);
+    writer.write(this);
+    return buffer.toString(StandardCharsets.UTF_8);
+}
+```
+
+*Source: [Document.java:237](https://github.com/vespa-engine/vespa/blob/master/document/src/main/java/com/yahoo/document/Document.java#L237)*
+
+```json
+{
+  "put": "id:music:song::love-is-here-to-stay",
+  "fields": {
+    "title": "Love is Here to Stay",
+    "artist": "Ella Fitzgerald",
+    "year": 1959,
+    "duration": 210
+  }
+}
+```
+
+## Document Inheritance
+
+Document types support inheritance for code reuse:
+
+```java
+public void inherit(DocumentType type) {
+    verifyTypeConsistency(type);
+    if (isRegistered()) {
+        throw new IllegalStateException(
+            "You cannot add inheritance to a document type that is already registered."
+        );
+    }
+    
+    // If it inherits the exact same type
+    if (inherits.contains(type)) return;
+    
+    inherits.add(type);
+    for (var field : type.getAllUniqueFields()) {
+        if (!contentStructType.hasField(field)) {
+            contentStructType.addField(field);
+        }
+    }
+}
+```
+
+*Source: [DocumentType.java:267](https://github.com/vespa-engine/vespa/blob/master/document/src/main/java/com/yahoo/document/DocumentType.java#L267)*
+
+<Warning>
+When a document type inherits from another, it cannot change the type of inherited fields - this ensures type consistency.
+</Warning>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Choose IDs Carefully" icon="key">
+    Use meaningful, stable identifiers that won't change
+  </Card>
+  <Card title="Plan Field Types" icon="list-check">
+    Select appropriate data types for your use case
+  </Card>
+  <Card title="Use Inheritance" icon="diagram-project">
+    Share common fields across related document types
+  </Card>
+  <Card title="Partial Updates" icon="pen-to-square">
+    Update only changed fields for better performance
+  </Card>
+</CardGroup>
+
+## Document Module Reference
+
+The document module contains the core document implementation:
+
+- **Module**: [`document`](https://github.com/vespa-engine/vespa/tree/master/document)
+- **Language**: Java and C++
+- **Key Classes**:
+  - `Document` - Main document class
+  - `DocumentType` - Document type definition
+  - `Field` - Field definition
+  - `DocumentId` - Document identifier
+  - `FieldValue` - Field value abstraction
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Schemas" icon="code" href="/concepts/schemas">
+    Define document structures in schema files
+  </Card>
+  <Card title="Document Operations" icon="gears" href="/api/document-v1">
+    Use the Document API
+  </Card>
+  <Card title="Indexing" icon="list-tree" href="/concepts/schemas#indexing">
+    Learn about indexing fields
+  </Card>
+</CardGroup>

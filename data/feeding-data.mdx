@@ -1,0 +1,360 @@
+---
+title: Feeding Data to Vespa
+description: Learn how to feed data to Vespa using the feed client, batch feeding, and HTTP API
+---
+
+## Overview
+
+Vespa provides multiple methods for feeding data into your application. The primary methods are:
+
+- **Feed Client** - High-performance Java client for asynchronous feeding
+- **HTTP API** - Direct HTTP/JSON API for document operations
+- **vespa-feed-client CLI** - Command-line tool for feeding
+
+## Feed Client
+
+The Vespa Feed Client is a high-throughput, asynchronous Java client for feeding documents to Vespa.
+
+### Creating a Feed Client
+
+Create a feed client by specifying the endpoint URI:
+
+```java
+import ai.vespa.feed.client.FeedClient;
+import ai.vespa.feed.client.FeedClientBuilder;
+
+// Single endpoint with load balancer
+FeedClient client = FeedClientBuilder.create(URI.create("https://vespa.example.com"))
+    .build();
+
+// Multiple endpoints (distributes load)
+List<URI> endpoints = List.of(
+    URI.create("https://node1.example.com"),
+    URI.create("https://node2.example.com")
+);
+FeedClient client = FeedClientBuilder.create(endpoints)
+    .build();
+```
+
+### Configuring the Feed Client
+
+The feed client provides extensive configuration options:
+
+```java
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setConnectionsPerEndpoint(8)       // Number of connections per endpoint
+    .setMaxStreamPerConnection(128)     // Max concurrent requests per connection
+    .setCertificate(certFile, keyFile)  // mTLS authentication
+    .setRetryStrategy(retryStrategy)    // Custom retry logic
+    .setCircuitBreaker(breaker)         // Circuit breaker for fault tolerance
+    .build();
+```
+
+Reference: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClientBuilder.java:21`
+
+### Connection Settings
+
+<Note>
+The total inflight capacity is `connectionsPerEndpoint × maxStreamsPerConnection`. The feed client automatically throttles to achieve optimal throughput.
+</Note>
+
+```java
+FeedClient client = FeedClientBuilder.create(endpoint)
+    // For high-throughput feeding
+    .setConnectionsPerEndpoint(16)
+    .setMaxStreamPerConnection(256)
+    
+    // Recycle connections periodically
+    .setConnectionTimeToLive(Duration.ofMinutes(10))
+    .build();
+```
+
+### Feeding Operations
+
+The feed client supports three main operations: put, update, and remove.
+
+<CodeGroup>
+
+```java Put Document
+import ai.vespa.feed.client.DocumentId;
+import ai.vespa.feed.client.OperationParameters;
+import ai.vespa.feed.client.Result;
+
+DocumentId id = DocumentId.of("mynamespace", "music", "doc1");
+String documentJson = """{
+    "fields": {
+        "title": "Bohemian Rhapsody",
+        "artist": "Queen",
+        "year": 1975
+    }
+}""";
+
+CompletableFuture<Result> promise = client.put(
+    id,
+    documentJson,
+    OperationParameters.empty()
+);
+
+// Handle result
+promise.whenComplete((result, error) -> {
+    if (error != null) {
+        System.err.println("Failed: " + error.getMessage());
+    } else {
+        System.out.println("Success: " + result.documentId());
+    }
+});
+```
+
+```java Update Document
+DocumentId id = DocumentId.of("mynamespace", "music", "doc1");
+String updateJson = """{
+    "fields": {
+        "year": { "assign": 1975 }
+    }
+}""";
+
+CompletableFuture<Result> promise = client.update(
+    id,
+    updateJson,
+    OperationParameters.empty()
+);
+```
+
+```java Remove Document
+DocumentId id = DocumentId.of("mynamespace", "music", "doc1");
+
+CompletableFuture<Result> promise = client.remove(
+    id,
+    OperationParameters.empty()
+);
+```
+
+</CodeGroup>
+
+Reference: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClient.java:24-40`
+
+### Operation Parameters
+
+Customize operations with parameters:
+
+```java
+import ai.vespa.feed.client.OperationParameters;
+
+OperationParameters params = OperationParameters.empty()
+    .createIfNonExistent(true)                    // Create document if missing
+    .timeout(Duration.ofSeconds(30))              // Operation timeout
+    .route("default")                             // Custom route
+    .tracelevel(5)                                // Enable tracing
+    .testAndSetCondition("music.year > 1970");   // Conditional operation
+
+client.put(id, documentJson, params);
+```
+
+## Batch Feeding
+
+For high-throughput batch feeding, send multiple operations concurrently:
+
+```java
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+List<CompletableFuture<Result>> promises = new ArrayList<>();
+
+// Send multiple operations
+for (Document doc : documents) {
+    DocumentId id = DocumentId.of("mynamespace", "music", doc.getId());
+    CompletableFuture<Result> promise = client.put(id, doc.toJson(), OperationParameters.empty());
+    promises.add(promise);
+}
+
+// Wait for all operations to complete
+try {
+    List<Result> results = FeedClient.await(promises);
+    System.out.println("Successfully fed " + results.size() + " documents");
+} catch (MultiFeedException e) {
+    System.err.println("Some operations failed: " + e.getMessage());
+    // Handle failures
+}
+```
+
+Reference: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClient.java:47-58`
+
+### Monitoring Feed Progress
+
+The feed client provides statistics for monitoring:
+
+```java
+import ai.vespa.feed.client.OperationStats;
+
+// Get current statistics
+OperationStats stats = client.stats();
+
+System.out.println("Requests sent: " + stats.requests());
+System.out.println("Responses received: " + stats.responses());
+System.out.println("Average latency: " + stats.averageLatencyMillis() + "ms");
+System.out.println("Min inflight: " + stats.minInflight());
+System.out.println("Max inflight: " + stats.maxInflight());
+
+// Reset stats (useful for filtering out warmup)
+client.resetStats();
+```
+
+## Circuit Breaker
+
+The feed client includes a circuit breaker to handle failures gracefully:
+
+```java
+import ai.vespa.feed.client.FeedClient.CircuitBreaker;
+import ai.vespa.feed.client.GracePeriodCircuitBreaker;
+
+// Configure circuit breaker
+CircuitBreaker breaker = new GracePeriodCircuitBreaker(
+    Duration.ofSeconds(10),  // Start probing after 10s of failures
+    Duration.ofSeconds(20)   // Go OPEN if failures persist for 20s
+);
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setCircuitBreaker(breaker)
+    .build();
+
+// Check circuit breaker state
+CircuitBreaker.State state = client.circuitBreakerState();
+switch (state) {
+    case CLOSED -> System.out.println("Normal operation");
+    case HALF_OPEN -> System.out.println("Probing recovery");
+    case OPEN -> System.out.println("Circuit breaker opened, failing fast");
+}
+```
+
+<Warning>
+The circuit breaker transitions to HALF_OPEN after the grace period and OPEN after the doom period. This prevents overwhelming a struggling backend.
+</Warning>
+
+Reference: `vespa-feed-client-api/src/main/java/ai/vespa/feed/client/FeedClient.java:86-169`
+
+## Retry Strategy
+
+Customize retry behavior for different operation types:
+
+```java
+import ai.vespa.feed.client.FeedClient.RetryStrategy;
+import ai.vespa.feed.client.FeedClient.OperationType;
+
+RetryStrategy strategy = new RetryStrategy() {
+    @Override
+    public boolean retry(OperationType type) {
+        // Don't retry remove operations
+        return type != OperationType.REMOVE;
+    }
+    
+    @Override
+    public int retries() {
+        // Maximum 5 retries per operation
+        return 5;
+    }
+};
+
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setRetryStrategy(strategy)
+    .build();
+```
+
+## HTTP Document API
+
+You can also feed documents directly using the HTTP API:
+
+```bash
+# Put document
+curl -X POST \
+  http://localhost:8080/document/v1/mynamespace/music/docid/doc1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fields": {
+      "title": "Bohemian Rhapsody",
+      "artist": "Queen"
+    }
+  }'
+
+# Update document
+curl -X PUT \
+  http://localhost:8080/document/v1/mynamespace/music/docid/doc1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "fields": {
+      "year": { "assign": 1975 }
+    }
+  }'
+
+# Remove document
+curl -X DELETE \
+  http://localhost:8080/document/v1/mynamespace/music/docid/doc1
+```
+
+Reference: `vespa-feed-client/src/main/java/ai/vespa/feed/client/impl/HttpFeedClient.java:295-315`
+
+## Closing the Client
+
+Always close the feed client when done:
+
+```java
+// Graceful close - wait for in-flight operations
+client.close();
+
+// Force close - abort in-flight operations
+client.close(false);
+```
+
+## Best Practices
+
+<Steps>
+
+### Size Your Connection Pool
+
+Set `connectionsPerEndpoint` to allow all feed clients to collectively have a small multiple of container nodes. Keep this as low as possible while maintaining throughput.
+
+### Use Compression
+
+Enable compression for large documents:
+
+```java
+FeedClient client = FeedClientBuilder.create(endpoint)
+    .setCompression(FeedClientBuilder.Compression.gzip)
+    .build();
+```
+
+### Monitor Statistics
+
+Regularly check statistics to identify bottlenecks:
+
+```java
+ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+scheduler.scheduleAtFixedRate(() -> {
+    OperationStats stats = client.stats();
+    log.info("Feed stats - requests: {}, latency: {}ms",
+        stats.requests(), stats.averageLatencyMillis());
+}, 10, 10, TimeUnit.SECONDS);
+```
+
+### Handle Errors Gracefully
+
+Implement proper error handling for feed failures:
+
+```java
+promise.whenComplete((result, error) -> {
+    if (error != null) {
+        if (error instanceof FeedException) {
+            FeedException fe = (FeedException) error;
+            // Log and potentially retry
+            log.error("Feed failed for {}: {}", fe.documentId(), fe.getMessage());
+        }
+    }
+});
+```
+
+</Steps>
+
+## See Also
+
+- [Document API](/data/document-api) - Detailed document operation reference
+- [Updates and Deletes](/data/updates-deletes) - Partial updates and conditional operations
+- [Indexing](/data/indexing) - How documents are indexed after feeding

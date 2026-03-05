@@ -1,80 +1,452 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart Guide
+description: Get started with Vespa in minutes by running a local instance with Docker and building your first search application
 ---
 
-## Get started in three steps
+This guide will get you up and running with Vespa in under 10 minutes. You'll learn how to:
 
-Get your documentation site running locally and make your first customization.
+- Run Vespa using Docker
+- Create a schema for your documents
+- Deploy an application
+- Feed data into Vespa
+- Query your data
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Docker" icon="docker">
+    Docker Desktop or Docker Engine installed
+  </Card>
+  <Card title="curl or similar" icon="terminal">
+    Command-line tool for HTTP requests
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+This guide uses Docker for simplicity. For production deployments, see the [Installation](/installation) page.
 </Note>
+
+## Step 1: Start Vespa
+
+Pull and run the Vespa container:
+
+<Steps>
+  <Step title="Pull the Vespa Docker image">
+    ```bash
+    docker pull vespaengine/vespa
+    ```
+  </Step>
+  
+  <Step title="Start the Vespa container">
+    ```bash
+    docker run --detach --name vespa --hostname vespa-container \
+      --publish 8080:8080 --publish 19071:19071 \
+      vespaengine/vespa
+    ```
+    
+    This command:
+    - Runs Vespa in detached mode
+    - Exposes port 8080 (query/feed API)
+    - Exposes port 19071 (config server)
+  </Step>
+  
+  <Step title="Wait for Vespa to start">
+    ```bash
+    docker exec vespa bash -c 'while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' http://localhost:19071/state/v1/health)" != "200" ]]; do sleep 1; done'
+    ```
+    
+    This ensures the config server is ready.
+  </Step>
+</Steps>
+
+<Check>
+Vespa is now running! Verify by visiting [http://localhost:8080](http://localhost:8080) in your browser.
+</Check>
+
+## Step 2: Create an Application
+
+Let's build a simple music search application.
+
+<Steps>
+  <Step title="Create the application directory structure">
+    ```bash
+    mkdir -p music-app/schemas
+    cd music-app
+    ```
+  </Step>
+  
+  <Step title="Create a schema file">
+    Create `schemas/music.sd` with the following content:
+    
+    ```vespa schemas/music.sd
+    schema music {
+        document music {
+            field artist type string {
+                indexing: summary | index
+                index: enable-bm25
+            }
+            
+            field title type string {
+                indexing: summary | index
+                index: enable-bm25
+            }
+            
+            field year type int {
+                indexing: summary | attribute
+            }
+            
+            field album type string {
+                indexing: summary | index
+            }
+        }
+        
+        fieldset default {
+            fields: artist, title, album
+        }
+        
+        rank-profile bm25 {
+            first-phase {
+                expression: bm25(artist) + bm25(title) + bm25(album)
+            }
+        }
+        
+        rank-profile default inherits bm25 {
+        }
+    }
+    ```
+    
+    This schema defines:
+    - Four fields: `artist`, `title`, `year`, and `album`
+    - BM25 ranking for text fields
+    - A default fieldset for searching across multiple fields
+  </Step>
+  
+  <Step title="Create a services configuration">
+    Create `services.xml`:
+    
+    ```xml services.xml
+    <?xml version="1.0" encoding="UTF-8"?>
+    <services version="1.0">
+        <container id="default" version="1.0">
+            <search/>
+            <document-api/>
+        </container>
+        
+        <content id="music" version="1.0">
+            <redundancy>1</redundancy>
+            <documents>
+                <document type="music" mode="index"/>
+            </documents>
+            <nodes>
+                <node distribution-key="0" hostalias="node1"/>
+            </nodes>
+        </content>
+    </services>
+    ```
+    
+    This configuration:
+    - Sets up a container cluster for query and document processing
+    - Defines a content cluster to store music documents
+    - Configures single-node redundancy (suitable for development)
+  </Step>
+</Steps>
+
+## Step 3: Deploy the Application
+
+Deploy your application to the running Vespa instance:
+
+<Steps>
+  <Step title="Create a deployment package">
+    ```bash
+    zip -r music-app.zip schemas/ services.xml
+    ```
+  </Step>
+  
+  <Step title="Deploy to Vespa">
+    ```bash
+    curl --header Content-Type:application/zip --data-binary @music-app.zip \
+      http://localhost:19071/application/v2/tenant/default/prepareandactivate
+    ```
+    
+    You should see a JSON response indicating successful deployment.
+  </Step>
+  
+  <Step title="Wait for application to be ready">
+    ```bash
+    curl -s http://localhost:8080/state/v1/health
+    ```
+    
+    The response should show the application is up and ready.
+  </Step>
+</Steps>
+
+<Check>
+Your application is now deployed and ready to receive data!
+</Check>
+
+## Step 4: Feed Data
+
+Let's add some music documents to Vespa.
+
+<Steps>
+  <Step title="Create sample documents">
+    Create a file `feed.json` with sample music data:
+    
+    ```json feed.json
+    {
+      "fields": {
+        "artist": "The Beatles",
+        "title": "Hey Jude",
+        "year": 1968,
+        "album": "Hey Jude"
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Feed the document">
+    ```bash
+    curl -X POST -H "Content-Type: application/json" \
+      --data-binary @feed.json \
+      http://localhost:8080/document/v1/music/music/docid/1
+    ```
+  </Step>
+  
+  <Step title="Feed more documents">
+    Let's add a few more:
+    
+    ```bash
+    # Document 2
+    curl -X POST -H "Content-Type: application/json" \
+      --data '{
+        "fields": {
+          "artist": "Pink Floyd",
+          "title": "Wish You Were Here",
+          "year": 1975,
+          "album": "Wish You Were Here"
+        }
+      }' \
+      http://localhost:8080/document/v1/music/music/docid/2
+    
+    # Document 3
+    curl -X POST -H "Content-Type: application/json" \
+      --data '{
+        "fields": {
+          "artist": "The Beatles",
+          "title": "Let It Be",
+          "year": 1970,
+          "album": "Let It Be"
+        }
+      }' \
+      http://localhost:8080/document/v1/music/music/docid/3
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Documents are immediately available for search after feeding — no reindexing required!
+</Note>
+
+## Step 5: Query Your Data
+
+Now let's search the data we just indexed.
+
+<CodeGroup>
+
+```bash Simple text search
+curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20userQuery()&query=beatles"
+```
+
+```bash Search with filters
+curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20year%20%3E%201969"
+```
+
+```bash Sort by year
+curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20true%20order%20by%20year%20desc"
+```
+
+```bash Count documents
+curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20true&hits=0"
+```
+
+</CodeGroup>
+
+### Understanding the Query API
+
+Vespa uses YQL (Yahoo Query Language) for queries. The basic structure is:
+
+```
+/search/?yql=SELECT <fields> FROM <source> WHERE <condition>
+```
+
+<Accordion title="Example: Full-text search with ranking">
+  ```bash
+  curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20userQuery()&query=beatles&ranking=bm25"
+  ```
+  
+  This query:
+  - Searches for "beatles" across all fields in the `default` fieldset
+  - Uses the `bm25` ranking profile
+  - Returns all fields (`*`) for matching documents
+</Accordion>
+
+<Accordion title="Example: Structured query with filters">
+  ```bash
+  curl "http://localhost:8080/search/?yql=select%20artist,%20title,%20year%20from%20music%20where%20artist%20contains%20'beatles'%20and%20year%20%3E%201968&ranking=bm25"
+  ```
+  
+  This query:
+  - Filters for Beatles songs from after 1968
+  - Returns only `artist`, `title`, and `year` fields
+  - Uses BM25 ranking
+</Accordion>
+
+### Query Response
+
+A typical response looks like:
+
+```json
+{
+  "root": {
+    "id": "toplevel",
+    "relevance": 1.0,
+    "fields": {
+      "totalCount": 2
+    },
+    "children": [
+      {
+        "id": "index:music/0/d73a07c63f23b36a1d5e1b5e",
+        "relevance": 0.36464314940319056,
+        "source": "music",
+        "fields": {
+          "artist": "The Beatles",
+          "title": "Hey Jude",
+          "year": 1968,
+          "album": "Hey Jude"
+        }
+      }
+    ]
+  }
+}
+```
+
+## Step 6: Update and Delete Documents
+
+<Tabs>
+  <Tab title="Update">
+    Update specific fields in a document:
+    
+    ```bash
+    curl -X PUT -H "Content-Type: application/json" \
+      --data '{
+        "fields": {
+          "year": { "assign": 1969 }
+        }
+      }' \
+      http://localhost:8080/document/v1/music/music/docid/1
+    ```
+    
+    Partial updates are efficient and don't require re-sending the entire document.
+  </Tab>
+  
+  <Tab title="Delete">
+    Delete a document by ID:
+    
+    ```bash
+    curl -X DELETE http://localhost:8080/document/v1/music/music/docid/1
+    ```
+    
+    The document is immediately removed from search results.
+  </Tab>
+  
+  <Tab title="Get">
+    Retrieve a specific document:
+    
+    ```bash
+    curl http://localhost:8080/document/v1/music/music/docid/2
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+Congratulations! You've successfully:
+
+- ✅ Started a Vespa instance
+- ✅ Created and deployed an application
+- ✅ Fed documents
+- ✅ Queried your data
+
+### Explore More
+
+<CardGroup cols={2}>
+  <Card title="Add Vector Search" icon="brain" href="https://docs.vespa.ai/en/nearest-neighbor-search.html">
+    Implement semantic search with embeddings
+  </Card>
+  <Card title="Advanced Ranking" icon="ranking-star" href="https://docs.vespa.ai/en/ranking.html">
+    Learn about multi-phase ranking and ML models
+  </Card>
+  <Card title="Production Setup" icon="server" href="/installation">
+    Deploy Vespa for production workloads
+  </Card>
+  <Card title="Sample Apps" icon="code" href="https://github.com/vespa-engine/sample-apps">
+    Explore complete example applications
+  </Card>
+</CardGroup>
+
+## Cleanup
+
+When you're done, stop and remove the Docker container:
+
+```bash
+docker stop vespa
+docker rm vespa
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    If ports 8080 or 19071 are already in use, you can map to different ports:
+    
+    ```bash
+    docker run --detach --name vespa --hostname vespa-container \
+      --publish 8081:8080 --publish 19072:19071 \
+      vespaengine/vespa
+    ```
+    
+    Then use `localhost:8081` for queries and `localhost:19072` for deployment.
+  </Accordion>
+  
+  <Accordion title="Deployment fails">
+    Check the Vespa logs:
+    
+    ```bash
+    docker logs vespa
+    ```
+    
+    Common issues:
+    - Schema syntax errors
+    - Invalid XML in services.xml
+    - Insufficient memory (Vespa needs at least 4GB RAM)
+  </Accordion>
+  
+  <Accordion title="Queries return no results">
+    Verify documents were fed successfully:
+    
+    ```bash
+    curl "http://localhost:8080/search/?yql=select%20*%20from%20music%20where%20true"
+    ```
+    
+    This returns all documents regardless of query terms.
+  </Accordion>
+</AccordionGroup>
+
+## Learn More
+
+- [Vespa Documentation](https://docs.vespa.ai)
+- [Vespa CLI Reference](https://docs.vespa.ai/en/reference/clients/vespa-cli.html)
+- [Document API](https://docs.vespa.ai/en/document-v1-api-guide.html)
+- [Query API](https://docs.vespa.ai/en/query-api.html)

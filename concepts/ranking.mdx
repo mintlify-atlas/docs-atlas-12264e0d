@@ -1,0 +1,543 @@
+---
+title: 'Ranking'
+description: 'Vespa ranking framework: features, expressions, and multi-phase ranking'
+---
+
+Ranking determines the order of search results. Vespa provides a powerful, flexible ranking framework that can scale from simple text ranking to complex machine learning models.
+
+## What is Ranking?
+
+Ranking is the process of **scoring documents** based on their relevance to a query. In Vespa, ranking:
+
+- Happens on content nodes after matching
+- Is highly configurable through rank profiles
+- Supports multiple ranking phases
+- Can use machine learning models
+- Leverages tensor computations for advanced features
+
+<Note>
+Vespa's ranking framework is implemented in the [`searchlib`](https://github.com/vespa-engine/vespa/tree/master/searchlib) module, with the Feature Execution Framework (FEF) at its core.
+</Note>
+
+## Rank Profiles
+
+Rank profiles define how documents are scored. They're declared in your schema:
+
+```javascript
+schema article {
+    document article {
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+        
+        field body type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+    }
+    
+    rank-profile default {
+        first-phase {
+            expression: nativeRank(title, body)
+        }
+    }
+    
+    rank-profile bm25 inherits default {
+        first-phase {
+            expression: bm25(title) + bm25(body)
+        }
+    }
+}
+```
+
+*Based on [msmarco.sd:61-71](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L61)*
+
+## Multi-Phase Ranking
+
+Vespa supports multi-phase ranking for efficiency:
+
+<Steps>
+  <Step title="First Phase">
+    Fast scoring of all matched documents
+  </Step>
+  <Step title="Second Phase">
+    Expensive scoring of top candidates from first phase
+  </Step>
+  <Step title="Global Phase (optional)">
+    Re-ranking across all content nodes
+  </Step>
+</Steps>
+
+### Why Multiple Phases?
+
+<CardGroup cols={2}>
+  <Card title="Efficiency" icon="gauge-high">
+    Avoid expensive computations on irrelevant documents
+  </Card>
+  <Card title="Scalability" icon="arrows-left-right">
+    Keep first-phase fast to handle large result sets
+  </Card>
+  <Card title="Accuracy" icon="bullseye">
+    Use complex models only on promising candidates
+  </Card>
+  <Card title="Flexibility" icon="sliders">
+    Different strategies per phase
+  </Card>
+</CardGroup>
+
+## Ranking Phases Example
+
+```javascript
+rank-profile hybrid {
+    first-phase {
+        expression: bm25(title) + bm25(body)
+    }
+    
+    second-phase {
+        rerank-count: 100
+        expression: sum(query(query_embedding) * attribute(doc_embedding))
+    }
+}
+```
+
+This profile:
+1. **First phase**: Fast BM25 scoring on all matches
+2. **Second phase**: Expensive embedding similarity on top 100
+
+## Rank Features
+
+Rank features are the building blocks of ranking expressions. Vespa provides hundreds of built-in features:
+
+### Text Ranking Features
+
+<Accordion title="nativeRank">
+  Vespa's default text ranking:
+  ```javascript
+  first-phase {
+      expression: nativeRank(title, body)
+  }
+  ```
+  Combines multiple text signals including term frequency and proximity.
+</Accordion>
+
+<Accordion title="bm25">
+  BM25 text ranking:
+  ```javascript
+  first-phase {
+      expression: bm25(title) + bm25(body)
+  }
+  ```
+  Industry-standard text ranking algorithm. Requires `index: enable-bm25` in schema.
+</Accordion>
+
+<Accordion title="fieldMatch">
+  Advanced text matching score:
+  ```javascript
+  first-phase {
+      expression: fieldMatch(title).completeness * fieldMatch(title).proximity
+  }
+  ```
+  Provides detailed text matching metrics like completeness, proximity, and coverage.
+</Accordion>
+
+### Attribute Features
+
+<Accordion title="attribute">
+  Access document field values:
+  ```javascript
+  first-phase {
+      expression: attribute(popularity) * bm25(title)
+  }
+  ```
+  Read any attribute field for use in ranking.
+</Accordion>
+
+<Accordion title="query">
+  Access query-time values:
+  ```javascript
+  first-phase {
+      expression: query(user_weight) * attribute(doc_quality)
+  }
+  ```
+  Pass dynamic values from query to ranking.
+</Accordion>
+
+### Tensor Features
+
+<Accordion title="Tensor Operations">
+  Perform tensor computations:
+  ```javascript
+  function similarity() {
+      expression: sum(query(query_embedding) * attribute(doc_embedding))
+  }
+  
+  first-phase {
+      expression: similarity()
+  }
+  ```
+  Full support for tensor operations in ranking.
+</Accordion>
+
+## Ranking Expressions
+
+Ranking expressions combine features using mathematical operations:
+
+### Basic Operations
+
+<CodeGroup>
+
+```javascript Addition
+first-phase {
+    expression: bm25(title) + bm25(body)
+}
+```
+
+```javascript Multiplication
+first-phase {
+    expression: bm25(title) * attribute(popularity)
+}
+```
+
+```javascript Conditional
+first-phase {
+    expression: if(attribute(premium) == 1, 
+                   bm25(title) * 2, 
+                   bm25(title))
+}
+```
+
+```javascript Functions
+function text_score() {
+    expression: bm25(title) + bm25(body)
+}
+
+function freshness() {
+    expression: 1 / (1 + (now - attribute(published_date)))
+}
+
+first-phase {
+    expression: text_score() * freshness()
+}
+```
+
+</CodeGroup>
+
+## Real-World Ranking Examples
+
+Here are some complete ranking profiles from Vespa's codebase:
+
+### BM25 Text Ranking
+
+```javascript
+rank-profile bm25 inherits default {
+    first-phase {
+        expression: bm25(title) + bm25(body)
+    }
+}
+```
+
+*From [msmarco.sd:67](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L67)*
+
+### Semantic Search with Embeddings
+
+```javascript
+rank-profile semantic inherits default {
+    function dot_product_title() {
+        expression: sum(query(tensor)*attribute(title_embedding))
+    }
+    
+    function dot_product_body() {
+        expression: sum(query(tensor)*attribute(body_embedding))
+    }
+    
+    first-phase {
+        expression: dot_product_title() + dot_product_body()
+    }
+    
+    ignore-default-rank-features
+    
+    rank-features {
+        rankingExpression(dot_product_title)
+        rankingExpression(dot_product_body)
+    }
+}
+```
+
+*From [msmarco.sd:73-88](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L73)*
+
+### Hybrid BM25 + Semantic
+
+```javascript
+rank-profile hybrid inherits default {
+    function dot_product_title() {
+        expression: sum(query(tensor)*attribute(title_embedding))
+    }
+    
+    function dot_product_body() {
+        expression: sum(query(tensor)*attribute(body_embedding))
+    }
+    
+    first-phase {
+        expression: bm25(title) + bm25(body) + 
+                   dot_product_title() + dot_product_body()
+    }
+    
+    ignore-default-rank-features
+    
+    rank-features {
+        bm25(title)
+        bm25(body)
+        rankingExpression(dot_product_title)
+        rankingExpression(dot_product_body)
+    }
+}
+```
+
+*From [msmarco.sd:124-141](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L124)*
+
+### Learned Weights
+
+```javascript
+rank-profile listwise_linear inherits default {
+    function dot_product_title() {
+        expression: sum(query(tensor)*attribute(title_embedding))
+    }
+    
+    function dot_product_body() {
+        expression: sum(query(tensor)*attribute(body_embedding))
+    }
+    
+    first-phase {
+        expression: 0.9005951 * bm25(title) + 
+                   2.2043643 * bm25(body) + 
+                   0.13506432 * dot_product_title() + 
+                   0.5840874 * dot_product_body()
+    }
+    
+    ignore-default-rank-features
+    
+    rank-features {
+        bm25(title)
+        bm25(body)
+        rankingExpression(dot_product_title)
+        rankingExpression(dot_product_body)
+    }
+}
+```
+
+*From [msmarco.sd:181-198](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L181)*
+
+## Feature Execution Framework
+
+The ranking framework is implemented through the Feature Execution Framework (FEF):
+
+```cpp
+// From searchlib/src/vespa/searchlib/fef/rank_program.h
+class RankProgram
+{
+private:
+    BlueprintResolver::SP            _resolver;
+    vespalib::Stash                  _hot_stash;
+    vespalib::Stash                  _cold_stash;
+    std::vector<FeatureExecutor *>   _executors;
+    
+public:
+    /**
+     * Set up this rank program by creating the needed feature
+     * executors and wiring them together. This function will also
+     * pre-calculate all constant features.
+     **/
+    void setup(const MatchData &md,
+               const IQueryEnvironment &queryEnv,
+               const Properties &featureOverrides = Properties(),
+               vespalib::ExecutionProfiler *profiler = nullptr);
+               
+    /**
+     * Obtain the names and storage locations of all seed features for
+     * this rank program.
+     **/
+    FeatureResolver get_seeds(bool unbox_seeds = true) const;
+};
+```
+
+*From [searchlib/src/vespa/searchlib/fef/rank_program.h:30](https://github.com/vespa-engine/vespa/blob/master/searchlib/src/vespa/searchlib/fef/rank_program.h#L30)*
+
+<Note>
+The RankProgram class creates and wires together feature executors, pre-calculating constant features for efficiency.
+</Note>
+
+## Rank Profile Inheritance
+
+Rank profiles can inherit from other profiles:
+
+```javascript
+rank-profile base {
+    function text_score() {
+        expression: bm25(title) + bm25(body)
+    }
+}
+
+rank-profile production inherits base {
+    first-phase {
+        expression: text_score() * attribute(quality_score)
+    }
+    
+    second-phase {
+        rerank-count: 50
+        expression: sum(query(query_embedding) * attribute(doc_embedding))
+    }
+}
+```
+
+## Machine Learning Models
+
+Vespa supports various ML models in ranking:
+
+### ONNX Models
+
+```javascript
+rank-profile ml_ranking {
+    function inputs() {
+        expression {
+            bm25_title: bm25(title),
+            bm25_body: bm25(body),
+            popularity: attribute(popularity)
+        }
+    }
+    
+    first-phase {
+        expression: onnx(my_model).score
+    }
+    
+    onnx-model my_model {
+        file: models/ranker.onnx
+        input inputs: inputs()
+        output: score
+    }
+}
+```
+
+### LightGBM / XGBoost
+
+```javascript
+rank-profile lightgbm {
+    first-phase {
+        expression: bm25(title)
+    }
+    
+    second-phase {
+        rerank-count: 100
+        expression: lightgbm("my_model.json")
+    }
+}
+```
+
+## Rank Features for Debugging
+
+Expose features for debugging or downstream processing:
+
+```javascript
+rank-profile debug inherits production {
+    ignore-default-rank-features
+    
+    rank-features {
+        bm25(title)
+        bm25(body)
+        attribute(popularity)
+        rankingExpression(text_score)
+        fieldMatch(title).completeness
+    }
+}
+```
+
+These features are returned in search results when requested:
+
+```json
+{
+  "yql": "select * from article where title contains 'vespa'",
+  "ranking": "debug",
+  "ranking.listFeatures": true
+}
+```
+
+## Ranking Performance
+
+### Optimization Tips
+
+<CardGroup cols={2}>
+  <Card title="Use First Phase Wisely" icon="gauge-high">
+    Keep first-phase simple - it runs on ALL matched documents
+  </Card>
+  <Card title="Limit Second Phase" icon="list-ol">
+    Set appropriate rerank-count (typically 50-1000)
+  </Card>
+  <Card title="Precompute Features" icon="clock">
+    Store computed values as attributes when possible
+  </Card>
+  <Card title="Profile Your Ranks" icon="chart-line">
+    Use ranking.listFeatures to identify slow features
+  </Card>
+</CardGroup>
+
+### Multi-Phase Strategy
+
+```javascript
+rank-profile efficient {
+    // Fast: scores 10,000+ documents
+    first-phase {
+        expression: bm25(title) * attribute(quality)
+    }
+    
+    // Medium: scores top 200
+    second-phase {
+        rerank-count: 200
+        expression: sum(query(q) * attribute(embedding))
+    }
+    
+    // Expensive: scores top 20 globally
+    global-phase {
+        rerank-count: 20
+        expression: onnx(complex_model).score
+    }
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Simple" icon="seedling">
+    Begin with BM25, add complexity as needed
+  </Card>
+  <Card title="Use Functions" icon="function">
+    Organize complex expressions into reusable functions
+  </Card>
+  <Card title="Profile Inheritance" icon="diagram-project">
+    Share common logic across profiles
+  </Card>
+  <Card title="Test Offline" icon="flask">
+    Use rank feature collection for ML training
+  </Card>
+</CardGroup>
+
+## Ranking Implementation
+
+**Key Modules**:
+
+- [`searchlib/fef`](https://github.com/vespa-engine/vespa/tree/master/searchlib/src/vespa/searchlib/fef) - Feature Execution Framework
+- [`searchlib/features`](https://github.com/vespa-engine/vespa/tree/master/searchlib/src/vespa/searchlib/features) - Built-in rank features
+- [`eval`](https://github.com/vespa-engine/vespa/tree/master/eval) - Ranking expression evaluation
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Tensors" icon="cube" href="/concepts/tensors">
+    Use tensors in ranking
+  </Card>
+  <Card title="Search" icon="magnifying-glass" href="/concepts/search">
+    Understand the matching phase
+  </Card>
+  <Card title="Schemas" icon="code" href="/concepts/schemas">
+    Configure fields for ranking
+  </Card>
+</CardGroup>

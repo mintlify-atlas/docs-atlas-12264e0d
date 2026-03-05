@@ -1,0 +1,627 @@
+---
+title: Vespa Cloud
+description: Deploy and manage Vespa applications on Vespa Cloud for production-ready, managed infrastructure
+---
+
+## Overview
+
+Vespa Cloud is a fully managed service for deploying and operating Vespa applications. It provides automated infrastructure management, continuous deployment, monitoring, and scaling without the operational overhead of self-hosting.
+
+## Getting Started
+
+### Prerequisites
+
+<Steps>
+  <Step title="Create Vespa Cloud Account">
+    Sign up for a free trial at [cloud.vespa.ai](https://cloud.vespa.ai)
+  </Step>
+  
+  <Step title="Install Vespa CLI">
+    ```bash
+    # macOS
+    brew install vespa-cli
+    
+    # Linux
+    curl -fsSL https://cli.vespa.ai/install.sh | bash
+    ```
+  </Step>
+  
+  <Step title="Authenticate">
+    ```bash
+    vespa auth login
+    ```
+  </Step>
+</Steps>
+
+### Create Your First Application
+
+```bash
+# Create application directory
+mkdir my-app && cd my-app
+
+# Create minimal application package
+mkdir -p schemas
+cat > services.xml << 'EOF'
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0">
+  <container id="default" version="1.0">
+    <search/>
+    <document-api/>
+  </container>
+  
+  <content id="music" version="1.0">
+    <redundancy>2</redundancy>
+    <documents>
+      <document type="music" mode="index"/>
+    </documents>
+    <nodes count="2">
+      <resources vcpu="2" memory="8Gb" disk="50Gb"/>
+    </nodes>
+  </content>
+</services>
+EOF
+
+cat > schemas/music.sd << 'EOF'
+schema music {
+    document music {
+        field title type string {
+            indexing: index | summary
+        }
+    }
+}
+EOF
+```
+
+### Deploy to Cloud
+
+```bash
+# Configure cloud target
+vespa config set target cloud
+vespa config set application my-tenant.my-app.default
+
+# Deploy application
+vespa deploy --wait 300
+```
+
+## Application Structure
+
+### deployment.xml
+
+For Vespa Cloud, add a `deployment.xml` file to define deployment pipeline:
+
+```xml deployment.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<deployment version="1.0" major-version="8">
+  
+  <!-- Automated testing environment -->
+  <test />
+  
+  <!-- Staging environment for validation -->
+  <staging />
+  
+  <!-- Production deployment -->
+  <prod>
+    <region active="true">aws-us-east-1c</region>
+    <region active="true">aws-eu-west-1a</region>
+  </prod>
+  
+</deployment>
+```
+
+### Multi-Region Deployment
+
+Deploy across multiple geographic regions:
+
+```xml deployment.xml
+<deployment version="1.0">
+  <test />
+  <staging />
+  
+  <prod>
+    <!-- Primary region -->
+    <region active="true">aws-us-east-1c</region>
+    
+    <!-- Secondary regions for global reach -->
+    <region active="true">aws-eu-west-1a</region>
+    <region active="true">aws-ap-southeast-1a</region>
+  </prod>
+</deployment>
+```
+
+<Note>
+Multi-region deployments provide low-latency access globally and improve availability.
+</Note>
+
+## Deployment Pipeline
+
+### Automated Testing
+
+Vespa Cloud automatically runs tests during deployment:
+
+<Steps>
+  <Step title="Test Environment">
+    Application deployed to isolated test environment
+  </Step>
+  
+  <Step title="System Tests">
+    Automated system tests run against test deployment
+  </Step>
+  
+  <Step title="Staging">
+    Application deployed to staging with production-like setup
+  </Step>
+  
+  <Step title="Staging Tests">
+    Automated staging tests validate behavior
+  </Step>
+  
+  <Step title="Production">
+    Application rolled out to production regions
+  </Step>
+</Steps>
+
+### Progressive Rollout
+
+Control deployment rollout with parallel and serial steps:
+
+```xml deployment.xml
+<deployment version="1.0">
+  <test />
+  <staging />
+  
+  <prod>
+    <!-- Deploy to first region -->
+    <region active="true">aws-us-east-1c</region>
+    
+    <!-- Wait before continuing -->
+    <delay hours="2" />
+    
+    <!-- Deploy remaining regions in parallel -->
+    <parallel>
+      <region active="true">aws-eu-west-1a</region>
+      <region active="true">aws-ap-southeast-1a</region>
+    </parallel>
+  </prod>
+</deployment>
+```
+
+### Deployment Blocking
+
+Prevent deployments during specific time windows:
+
+```xml deployment.xml
+<deployment version="1.0">
+  
+  <!-- Block deployments during business hours -->
+  <block-change 
+    revision="true" 
+    version="false" 
+    days="mon-fri" 
+    hours="9-17" 
+    time-zone="America/New_York" />
+  
+  <test />
+  <staging />
+  <prod>
+    <region active="true">aws-us-east-1c</region>
+  </prod>
+  
+</deployment>
+```
+
+## Resource Specification
+
+### Node Resources
+
+Specify compute resources for each cluster:
+
+```xml services.xml
+<services version="1.0">
+  <container id="query" version="1.0">
+    <search/>
+    
+    <!-- Query cluster with autoscaling -->
+    <nodes count="[2,8]">
+      <resources vcpu="4" memory="16Gb" disk="100Gb" disk-speed="fast"/>
+    </nodes>
+  </container>
+  
+  <content id="documents" version="1.0">
+    <redundancy>2</redundancy>
+    <documents>
+      <document type="doc" mode="index"/>
+    </documents>
+    
+    <!-- Content cluster with fixed size -->
+    <nodes count="6" groups="3">
+      <resources vcpu="8" memory="32Gb" disk="500Gb" disk-speed="fast" storage-type="local"/>
+    </nodes>
+  </content>
+</services>
+```
+
+### Autoscaling
+
+Enable autoscaling with range notation:
+
+```xml
+<container id="query" version="1.0">
+  <search/>
+  
+  <!-- Autoscale between 3 and 10 nodes -->
+  <nodes count="[3,10]">
+    <resources vcpu="4" memory="16Gb" disk="100Gb"/>
+  </nodes>
+</container>
+```
+
+<Note>
+Vespa Cloud automatically scales based on traffic patterns, CPU usage, and query latency.
+</Note>
+
+### Resource Attributes
+
+<Accordion title="Available Resource Attributes">
+  - **vcpu**: Virtual CPU cores (e.g., `4`, `8`, `16`)
+  - **memory**: RAM allocation (e.g., `8Gb`, `32Gb`, `64Gb`)
+  - **disk**: Storage size (e.g., `100Gb`, `500Gb`, `1800Gb`)
+  - **disk-speed**: `fast` (SSD) or `any`
+  - **storage-type**: `local` (instance storage) or `remote` (network storage)
+</Accordion>
+
+## Environment-Specific Configuration
+
+### Multiple Instances
+
+Define multiple application instances:
+
+```xml deployment.xml
+<deployment version="1.0">
+  
+  <!-- Development instance -->
+  <instance id="dev">
+    <test />
+    <prod>
+      <region active="true">aws-us-east-1c</region>
+    </prod>
+  </instance>
+  
+  <!-- Production instance -->
+  <instance id="prod">
+    <test />
+    <staging />
+    <prod>
+      <region active="true">aws-us-east-1c</region>
+      <region active="true">aws-eu-west-1a</region>
+    </prod>
+  </instance>
+  
+</deployment>
+```
+
+### Instance-Specific Services
+
+Configure services per instance:
+
+```xml services.xml
+<services version="1.0" xmlns:deploy="vespa">
+  <container id="query" version="1.0">
+    <search/>
+    
+    <!-- Dev instance: 1 small node -->
+    <nodes count="1" deploy:instance="dev">
+      <resources vcpu="2" memory="8Gb" disk="50Gb"/>
+    </nodes>
+    
+    <!-- Prod instance: autoscaling cluster -->
+    <nodes count="[3,10]" deploy:instance="prod">
+      <resources vcpu="8" memory="32Gb" disk="100Gb" disk-speed="fast"/>
+    </nodes>
+  </container>
+</services>
+```
+
+## Deployment Methods
+
+### Using Vespa CLI
+
+The recommended deployment method:
+
+```bash
+# Deploy current directory
+vespa deploy --wait 300
+
+# Deploy specific application package
+vespa deploy my-app/ --wait 300
+
+# Deploy to specific instance
+vespa config set application my-tenant.my-app.prod
+vespa deploy --wait 300
+```
+
+### Using Maven Plugin
+
+Integrate with Maven builds:
+
+```xml pom.xml
+<project>
+  <properties>
+    <vespa.version>8.123.45</vespa.version>
+  </properties>
+  
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>com.yahoo.vespa</groupId>
+        <artifactId>vespa-maven-plugin</artifactId>
+        <version>${vespa.version}</version>
+        <configuration>
+          <tenant>my-tenant</tenant>
+          <application>my-app</application>
+          <instance>default</instance>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+```
+
+Deploy with Maven:
+
+```bash
+# Compile and deploy
+mvn package vespa:deploy
+
+# Submit deployment job
+mvn vespa:submit
+```
+
+### Using GitHub Actions
+
+Automate deployments with CI/CD:
+
+```yaml .github/workflows/deploy.yml
+name: Deploy to Vespa Cloud
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to Vespa Cloud
+        uses: vespa-engine/vespa-github-actions/deploy@v1
+        with:
+          tenant: my-tenant
+          application: my-app
+          instance: prod
+          api-key: ${{ secrets.VESPA_API_KEY }}
+          wait: 'true'
+```
+
+## API Keys and Authentication
+
+### Creating API Keys
+
+Generate API keys for programmatic access:
+
+```bash
+# Create API key via Vespa Cloud Console
+# Or use CLI
+vespa auth api-key
+```
+
+### Using API Keys
+
+Authenticate using API keys:
+
+```bash
+# Set API key in environment
+export VESPA_CLI_API_KEY="your-api-key"
+
+# Deploy with API key
+vespa deploy --wait 300
+```
+
+<Warning>
+Never commit API keys to version control. Use environment variables or secrets management.
+</Warning>
+
+## Monitoring and Observability
+
+### Built-in Monitoring
+
+Vespa Cloud provides comprehensive monitoring:
+
+- Query latency and throughput
+- Document feed rates and errors
+- Resource utilization (CPU, memory, disk)
+- Application-specific metrics
+
+Access metrics via Vespa Cloud Console or API.
+
+### Custom Metrics
+
+Expose custom metrics from your application:
+
+```java
+import com.yahoo.jdisc.Metric;
+
+public class MyComponent {
+    private final Metric metric;
+    
+    public MyComponent(Metric metric) {
+        this.metric = metric;
+    }
+    
+    public void processRequest() {
+        metric.add("my_custom_metric", 1, null);
+    }
+}
+```
+
+### Logs
+
+Access application logs:
+
+```bash
+# Tail logs
+vespa log --follow
+
+# Filter by log level
+vespa log --level warning
+
+# Query historical logs
+vespa log --from 1h
+```
+
+## Security
+
+### mTLS Authentication
+
+Vespa Cloud uses mutual TLS for secure communication:
+
+```bash
+# CLI automatically handles certificates
+vespa query 'select * from sources * where title contains "hello"'
+```
+
+### Data Plane Access
+
+Configure data plane authentication:
+
+```xml services.xml
+<services version="1.0">
+  <container id="default" version="1.0">
+    <search/>
+    <document-api/>
+    
+    <!-- Enable mTLS for data plane -->
+    <clients>
+      <client id="my-client">
+        <certificate file="client-cert.pem"/>
+      </client>
+    </clients>
+  </container>
+</services>
+```
+
+## Cost Optimization
+
+<Steps>
+  <Step title="Right-Size Resources">
+    Monitor resource usage and adjust vcpu/memory allocations accordingly
+  </Step>
+  
+  <Step title="Use Autoscaling">
+    Enable autoscaling for variable workloads to avoid over-provisioning
+  </Step>
+  
+  <Step title="Optimize Redundancy">
+    Use `redundancy="2"` for development, `redundancy="3"` only when necessary
+  </Step>
+  
+  <Step title="Leverage Searchable Copies">
+    Set `searchable-copies` lower than `redundancy` to reduce indexing costs
+  </Step>
+</Steps>
+
+## Migration from Self-Hosted
+
+### Preparing Application Package
+
+Update your application for Vespa Cloud:
+
+<Steps>
+  <Step title="Add deployment.xml">
+    Create deployment specification for cloud environments
+  </Step>
+  
+  <Step title="Update Resource Specifications">
+    Replace host-based configuration with resource specifications
+  </Step>
+  
+  <Step title="Remove hosts.xml">
+    Vespa Cloud manages hosts automatically
+  </Step>
+  
+  <Step title="Test Locally">
+    Validate changes with local deployment
+  </Step>
+</Steps>
+
+### Data Migration
+
+Migrate data to Vespa Cloud:
+
+```bash
+# Export data from self-hosted
+vespa visit --target local > documents.jsonl
+
+# Import to Vespa Cloud
+vespa feed documents.jsonl --target cloud
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Start with Test Environment">
+    Always deploy to test/staging before production
+  </Step>
+  
+  <Step title="Use Version Control">
+    Keep application packages in Git for traceability
+  </Step>
+  
+  <Step title="Implement CI/CD">
+    Automate deployments with GitHub Actions or similar tools
+  </Step>
+  
+  <Step title="Monitor Deployments">
+    Watch metrics during and after deployments to catch issues early
+  </Step>
+  
+  <Step title="Plan for Global Distribution">
+    Deploy to multiple regions for low latency and high availability
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Deployment Failures
+
+Check deployment status:
+
+```bash
+vespa status deployment
+```
+
+### Application Not Responding
+
+Verify endpoints:
+
+```bash
+vespa status
+```
+
+### High Latency
+
+Analyze query performance:
+
+```bash
+vespa query 'select * from sources * where true' \
+  --timeout 5 \
+  --trace-level 5
+```
+
+## Related Resources
+
+- [Application Packages](/deployment/application-packages)
+- [services.xml Configuration](/deployment/services-xml)
+- [Multi-node Systems](/deployment/multinode-systems)
+- [Docker Deployment](/deployment/docker)
+- [Vespa Cloud Documentation](https://cloud.vespa.ai/docs)

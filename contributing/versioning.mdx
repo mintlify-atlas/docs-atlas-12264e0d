@@ -1,0 +1,364 @@
+---
+title: 'Versioning and API Compatibility'
+description: 'Learn about Vespa semantic versioning, API compatibility requirements, and ABI verification'
+---
+
+Vespa uses semantic versioning and maintains strict API compatibility guarantees. This guide explains the versioning policy and how to work with public APIs.
+
+## Semantic Versioning
+
+Vespa follows semantic versioning as described at [vespa.ai/releases#versions](https://vespa.ai/releases#versions).
+
+<Note>
+Version numbers follow the format **MAJOR.MINOR.PATCH** where:
+- **MAJOR** version changes indicate incompatible API changes
+- **MINOR** version changes add functionality in a backward-compatible manner
+- **PATCH** version changes are backward-compatible bug fixes
+</Note>
+
+## Public API Compatibility
+
+### API Annotations
+
+Vespa uses Java annotations to mark public APIs:
+
+<CodeGroup>
+```java @PublicAPI
+// In package-info.java
+@PublicAPI
+package com.yahoo.search.query;
+
+import com.yahoo.api.annotations.PublicAPI;
+```
+
+```java @Beta
+// For experimental APIs
+@Beta
+public class ExperimentalFeature {
+    // This API is not yet stable
+}
+```
+</CodeGroup>
+
+### Compatibility Rules
+
+<Warning>
+Any Java API in a package having a `@PublicAPI` annotation in the package-info, and **no** `@Beta` annotation on the class, cannot be changed in an incompatible way between major versions.
+</Warning>
+
+This means for public, non-beta APIs:
+
+<Steps>
+  <Step title="Preserve Existing Types">
+    You cannot remove or rename existing classes, interfaces, or enums.
+  </Step>
+  
+  <Step title="Preserve Method Signatures">
+    You cannot change or remove existing method signatures, including:
+    - Method names
+    - Parameter types
+    - Return types
+    - Thrown exceptions (cannot add checked exceptions)
+  </Step>
+  
+  <Step title="Deprecate Instead of Remove">
+    If you need to phase out functionality, mark it as `@Deprecated` rather than removing it.
+    
+    ```java
+    @Deprecated(since = "8.123", forRemoval = true)
+    public void oldMethod() {
+        // Keep implementation for backward compatibility
+    }
+    ```
+  </Step>
+</Steps>
+
+### What You Can Do
+
+For public APIs, you **can**:
+
+<Accordion title="Add New Methods">
+Adding new methods to interfaces or classes is allowed (though it may require updating the ABI spec):
+
+```java
+public interface SearchQuery {
+    // Existing method - cannot change
+    String getQuery();
+    
+    // New method - OK to add
+    Optional<String> getFilter();
+}
+```
+</Accordion>
+
+<Accordion title="Add New Classes">
+Adding entirely new classes to a `@PublicAPI` package is allowed:
+
+```java
+// New class in existing @PublicAPI package
+public class NewFeature {
+    public void doSomething() { }
+}
+```
+</Accordion>
+
+<Accordion title="Widen Visibility">
+Changing protected methods to public, or package-private to public is allowed:
+
+```java
+// Before
+protected void helper() { }
+
+// After - OK to widen
+public void helper() { }
+```
+</Accordion>
+
+<Accordion title="Mark APIs as @Beta">
+New APIs can be marked as `@Beta` to indicate they're experimental:
+
+```java
+@Beta
+public class ExperimentalRanking {
+    // This API may change in minor versions
+}
+```
+</Accordion>
+
+## ABI Verification
+
+### Automatic Verification
+
+ABI (Application Binary Interface) compatibility is verified during the regular Java build:
+
+```bash
+mvn install
+```
+
+<Note>
+The build step will **automatically verify** that you haven't broken ABI compatibility.
+</Note>
+
+### Build Failures
+
+The ABI verification can fail in two scenarios:
+
+<Accordion title="Incompatible Changes">
+If you make incompatible changes to public APIs:
+
+```bash
+[ERROR] ABI compatibility check failed:
+[ERROR]   Method removed: com.yahoo.search.Query.getTimeout()I
+[ERROR]   This breaks binary compatibility!
+```
+
+**Solution**: Revert the incompatible change and find an alternative approach (e.g., add a new method instead of changing an existing one).
+</Accordion>
+
+<Accordion title="New Public API Additions">
+If you add to public APIs:
+
+```bash
+[ERROR] ABI compatibility check failed:
+[ERROR]   New public method detected: com.yahoo.search.Query.getFilter()Ljava/util/Optional;
+[ERROR]   Update the ABI spec as instructed below
+```
+
+**Solution**: This is fine if there's a good reason. Update the ABI spec as instructed in the error message:
+
+```bash
+# The error message will tell you the exact command to run
+mvn japicmp:cmp-save
+```
+</Accordion>
+
+### When ABI Checks Fail
+
+<Steps>
+  <Step title="Read the Error Message">
+    The build output will clearly indicate what compatibility issue was detected.
+  </Step>
+  
+  <Step title="Determine if the Change is Intentional">
+    - If it's an incompatible change: You need to find an alternative approach
+    - If it's a new addition: Proceed to update the spec
+  </Step>
+  
+  <Step title="Update the ABI Spec (for new additions)">
+    Run the command provided in the error message to update the baseline.
+  </Step>
+  
+  <Step title="Include the Updated Spec in Your PR">
+    Commit the updated ABI spec file along with your code changes.
+  </Step>
+</Steps>
+
+## Working with Beta APIs
+
+### When to Use @Beta
+
+Mark APIs as `@Beta` when:
+
+- The API is experimental and might change
+- You're not yet confident about the design
+- You want to gather user feedback before stabilizing
+- The feature is new and untested in production
+
+```java
+import com.yahoo.api.annotations.Beta;
+
+@Beta
+public class NewRankingFeature {
+    public void configure(Properties props) {
+        // Implementation may change in future versions
+    }
+}
+```
+
+### Beta API Rules
+
+<Warning>
+`@Beta` APIs can change in **minor versions** without being considered a breaking change.
+</Warning>
+
+This gives you flexibility to:
+- Change method signatures
+- Rename classes
+- Remove functionality
+- Completely redesign the API
+
+### Graduating Beta APIs
+
+When a `@Beta` API is ready to become stable:
+
+1. Remove the `@Beta` annotation
+2. Update documentation to reflect the API is now stable
+3. From that point forward, follow the strict compatibility rules
+
+<Note>
+Once you remove `@Beta`, you're committing to maintaining backward compatibility until the next major version.
+</Note>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Design for Extension" icon="arrows-split">
+    Design APIs with future extension in mind. Use interfaces, abstract classes, and builder patterns that allow adding functionality later.
+  </Card>
+  
+  <Card title="Use @Beta Liberally" icon="flask">
+    When in doubt, mark new APIs as `@Beta` initially. You can always stabilize later, but you can't take it back.
+  </Card>
+  
+  <Card title="Document Deprecations" icon="file-lines">
+    When deprecating, clearly document what users should use instead and when the API will be removed.
+  </Card>
+  
+  <Card title="Plan for Major Versions" icon="calendar">
+    Keep track of deprecated APIs and plan cleanup for major version releases.
+  </Card>
+</CardGroup>
+
+## Examples
+
+### Adding a New Method (Compatible)
+
+```java
+// Version 8.100 - Original API
+public class Query {
+    public String getQuery() {
+        return query;
+    }
+}
+
+// Version 8.123 - Add new method (COMPATIBLE)
+public class Query {
+    public String getQuery() {
+        return query;
+    }
+    
+    // New method added - this is OK
+    public Optional<String> getFilter() {
+        return Optional.ofNullable(filter);
+    }
+}
+```
+
+### Changing a Method (Incompatible)
+
+```java
+// Version 8.100 - Original API
+public class Query {
+    public String getQuery() {
+        return query;
+    }
+}
+
+// Version 8.123 - WRONG! This breaks compatibility
+public class Query {
+    // INCOMPATIBLE: Changed return type
+    public Optional<String> getQuery() {
+        return Optional.ofNullable(query);
+    }
+}
+
+// Version 8.123 - CORRECT approach
+public class Query {
+    // Keep original method
+    public String getQuery() {
+        return query;
+    }
+    
+    // Add new method with better design
+    public Optional<String> getQueryOptional() {
+        return Optional.ofNullable(query);
+    }
+}
+```
+
+### Deprecating Old APIs
+
+```java
+// Version 8.100
+public class Ranking {
+    public void setRankProfile(String profile) {
+        this.profile = profile;
+    }
+}
+
+// Version 8.150 - Better API added
+public class Ranking {
+    // Keep old method but deprecate it
+    @Deprecated(since = "8.150", forRemoval = true)
+    public void setRankProfile(String profile) {
+        // Implementation still works
+        this.profile = profile;
+    }
+    
+    // New recommended API
+    public void setRankProfile(RankProfile profile) {
+        this.profile = profile.getName();
+    }
+}
+
+// Version 9.0 - Can finally remove
+public class Ranking {
+    // Old method removed in major version
+    
+    public void setRankProfile(RankProfile profile) {
+        this.profile = profile.getName();
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Contributing Guide" href="/contributing/guide">
+    Learn about the overall contribution process
+  </Card>
+  
+  <Card title="Pull Request Process" href="/contributing/pull-requests">
+    Understand how to submit and review PRs
+  </Card>
+</CardGroup>

@@ -1,0 +1,517 @@
+---
+title: Stateless Model Evaluation
+---
+
+Vespa supports two distinct modes for evaluating machine learning models: **stateless evaluation** in container nodes and **ranking evaluation** on content nodes. Understanding when to use each approach is crucial for optimal performance.
+
+## Overview
+
+Vespa provides flexibility in where and how models are evaluated:
+
+<CardGroup cols={2}>
+  <Card title="Stateless Evaluation" icon="box">
+    Models run in container nodes, independent of document ranking
+  </Card>
+  <Card title="Ranking Evaluation" icon="ranking-star">
+    Models run on content nodes during document ranking
+  </Card>
+</CardGroup>
+
+## Stateless Model Evaluation
+
+Stateless model evaluation runs in **container nodes** using the `ModelsEvaluator` component. This is ideal for:
+
+- Pre-processing and feature generation
+- Query embedding generation
+- Stateless prediction endpoints
+- Model serving via REST API
+- Batch inference requests
+
+### Architecture
+
+```
+┌─────────────────────┐
+│   Client Request    │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Container Node     │
+│  ┌───────────────┐  │
+│  │ModelsEvaluator│  │  Stateless evaluation
+│  │  ONNX Model   │  │  (no document access)
+│  └───────────────┘  │
+└─────────────────────┘
+           │
+           ▼
+     JSON Response
+```
+
+### Configuration
+
+Enable stateless model evaluation in `services.xml`:
+
+```xml
+<services version="1.0">
+  <container id="default" version="1.0">
+    <!-- Enable model evaluation -->
+    <model-evaluation />
+    
+    <!-- Models are loaded from rank profiles -->
+    <nodes>
+      <node hostalias="node1" />
+    </nodes>
+  </container>
+  
+  <content id="content" version="1.0">
+    <documents>
+      <document type="doc" mode="index" />
+    </documents>
+  </content>
+</services>
+```
+
+### ModelsEvaluator API
+
+The `ModelsEvaluator` provides the core stateless evaluation API:
+
+```java
+// From: model-evaluation/src/main/java/ai/vespa/models/evaluation/ModelsEvaluator.java:17-86
+/**
+ * Evaluates machine-learned models added to Vespa applications and available as config form.
+ * Usage:
+ * <code>Tensor result = evaluator.bind("foo", value).bind("bar", value").evaluate()</code>
+ *
+ * @author bratseth
+ */
+@Beta
+public class ModelsEvaluator extends AbstractComponent {
+
+    private final Map<String, Model> models;
+
+    @Inject
+    public ModelsEvaluator(RankProfilesConfig config,
+                           RankingConstantsConfig constantsConfig,
+                           RankingExpressionsConfig expressionsConfig,
+                           OnnxModelsConfig onnxModelsConfig,
+                           FileAcquirer fileAcquirer,
+                           OnnxRuntime onnx) {
+        this(new RankProfilesConfigImporter(fileAcquirer, onnx), config, constantsConfig, expressionsConfig, onnxModelsConfig);
+    }
+
+    /** Returns the models of this as an immutable map */
+    public Map<String, Model> models() { return models; }
+
+    /**
+     * Returns a function which can be used to evaluate the given function in the given model
+     *
+     * @param modelName the name of the model
+     * @param names the 0-2 name components identifying the output to compute
+     * @throws IllegalArgumentException if the function or model is not present
+     */
+    public FunctionEvaluator evaluatorOf(String modelName, String ... names) {
+        return requireModel(modelName).evaluatorOf(names);
+    }
+}
+```
+
+### REST API
+
+Access models via the stateless REST API:
+
+```java
+// From: model-evaluation/src/main/java/ai/vespa/models/handler/ModelsEvaluationHandler.java:38-41
+public static final String API_ROOT = "model-evaluation";
+public static final String VERSION_V1 = "v1";
+public static final String EVALUATE = "eval";
+```
+
+#### List Available Models
+
+```bash
+curl http://localhost:8080/model-evaluation/v1/
+```
+
+Response:
+```json
+{
+  "text_classifier": "http://localhost:8080/model-evaluation/v1/text_classifier",
+  "embedder": "http://localhost:8080/model-evaluation/v1/embedder"
+}
+```
+
+#### Get Model Information
+
+```bash
+curl http://localhost:8080/model-evaluation/v1/text_classifier
+```
+
+Response:
+```json
+{
+  "model": "text_classifier",
+  "functions": [
+    {
+      "function": "default.output",
+      "info": "http://localhost:8080/model-evaluation/v1/text_classifier/default.output",
+      "eval": "http://localhost:8080/model-evaluation/v1/text_classifier/default.output/eval",
+      "arguments": [
+        {"name": "input", "type": "tensor<float>(d0[10])"}
+      ]
+    }
+  ]
+}
+```
+
+#### Evaluate Model
+
+```bash
+curl -X POST 'http://localhost:8080/model-evaluation/v1/text_classifier/eval' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'input=tensor<float>(d0[10]):[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]'
+```
+
+Response:
+```json
+{
+  "cells": [
+    {"address": {"d0": "0"}, "value": 0.85},
+    {"address": {"d0": "1"}, "value": 0.15}
+  ]
+}
+```
+
+### Evaluation Handler
+
+The REST handler processes evaluation requests:
+
+```java
+// From: model-evaluation/src/main/java/ai/vespa/models/handler/ModelsEvaluationHandler.java:90-115
+private HttpResponse evaluateModel(HttpRequest request, Model model, String[] function)  {
+    FunctionEvaluator evaluator = model.evaluatorOf(function);
+
+    property(request, missingValueKey).ifPresent(missingValue -> evaluator.setMissingValue(Tensor.from(missingValue)));
+
+    for (Map.Entry<String, TensorType> argument : evaluator.function().argumentTypes().entrySet()) {
+        Optional<String> value = property(request, argument.getKey());
+        if (value.isPresent()) {
+            try {
+                evaluator.bind(argument.getKey(), Tensor.from(argument.getValue(), value.get()));
+            } catch (IllegalArgumentException e) {
+                evaluator.bind(argument.getKey(), value.get());  // since we don't yet support tensors with string values
+            }
+        }
+    }
+    Tensor result = evaluator.evaluate();
+    return switch (property(request, "format.tensors").orElse("short").toLowerCase(java.util.Locale.ROOT)) {
+        case "short"        -> new Response(200, JsonFormat.encode(result, true,  false));
+        case "long"         -> new Response(200, JsonFormat.encode(result, false, false));
+        case "short-value"  -> new Response(200, JsonFormat.encode(result, true,  true));
+        case "long-value"   -> new Response(200, JsonFormat.encode(result, false, true));
+        case "string"       -> new Response(200, result.toString(true, true).getBytes(StandardCharsets.UTF_8));
+        default             -> new ErrorResponse(400, "Unknown tensor format");
+    };
+}
+```
+
+### Use Cases
+
+<AccordionGroup>
+  <Accordion title="Query Embedding Generation">
+    Generate query embeddings before search:
+    
+    ```bash
+    # Generate embedding for query
+    curl -X POST 'http://localhost:8080/model-evaluation/v1/embedder/eval' \
+      -d 'text=machine learning tutorial'
+    
+    # Use embedding in search query
+    vespa query 'yql=select * from doc where ...' \
+      'input.query(q_embedding)=tensor<float>(x[384]):[0.1,0.2,...]'
+    ```
+  </Accordion>
+  
+  <Accordion title="Feature Preprocessing">
+    Transform features before ranking:
+    
+    ```python
+    import requests
+    
+    # Preprocess features
+    response = requests.post(
+        'http://localhost:8080/model-evaluation/v1/preprocessor/eval',
+        data={'raw_features': 'tensor<float>(d0[5]):[1,2,3,4,5]'}
+    )
+    
+    processed = response.json()
+    
+    # Use in query
+    query_params = {
+        'yql': 'select * from doc where ...',
+        'input.query(features)': processed['tensor_string']
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Batch Predictions">
+    Process multiple inputs efficiently:
+    
+    ```python
+    import requests
+    import concurrent.futures
+    
+    def evaluate_item(item):
+        return requests.post(
+            'http://localhost:8080/model-evaluation/v1/classifier/eval',
+            data={'input': item}
+        ).json()
+    
+    items = [f'tensor<float>(d0[10]):[{i},...]' for i in range(100)]
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(evaluate_item, items))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Ranking Model Evaluation
+
+Ranking evaluation runs models on **content nodes** during document ranking. This is optimal for:
+
+- First-phase and second-phase ranking
+- Per-document model inference
+- Accessing document attributes and features
+- Low-latency ranking with model scoring
+
+### Architecture
+
+```
+┌─────────────────────┐
+│  Container Node     │
+│  (Query Processing) │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│   Content Node      │
+│  ┌───────────────┐  │
+│  │  Documents    │  │  Ranking evaluation
+│  │  + Model      │  │  (per-document scoring)
+│  └───────────────┘  │
+└─────────────────────┘
+           │
+           ▼
+    Ranked Results
+```
+
+### Configuration
+
+Define models in schemas for ranking:
+
+```
+schema product {
+    document product {
+        field title type string {}
+        field price type float {}
+    }
+    
+    onnx-model ranker {
+        file: models/ranker.onnx
+        input features: rankingFeatures
+    }
+    
+    rank-profile ml_ranking {
+        function rankingFeatures() {
+            expression: tensor<float>(d0[10]):[
+                attribute(price),
+                fieldMatch(title).completeness,
+                attribute(popularity),
+                freshness(timestamp),
+                query(user_score),
+                ...
+            ]
+        }
+        
+        first-phase {
+            expression: bm25(title)
+        }
+        
+        second-phase {
+            expression: onnx(ranker).output
+            rerank-count: 100
+        }
+    }
+}
+```
+
+### Use Cases
+
+<AccordionGroup>
+  <Accordion title="Cross-Encoder Reranking">
+    Use BERT-based cross-encoders for reranking:
+    
+    ```
+    onnx-model cross_encoder {
+        file: models/cross_encoder.onnx
+        input input_ids: inputTokens
+        input attention_mask: inputMask
+    }
+    
+    rank-profile rerank {
+        first-phase {
+            expression: bm25(title) + bm25(body)
+        }
+        
+        second-phase {
+            expression: onnx(cross_encoder).logits{d0:0,d1:0}
+            rerank-count: 100
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Feature-Based Ranking">
+    Combine multiple features in ranking models:
+    
+    ```
+    rank-profile ml_features {
+        function features() {
+            expression: tensor<float>(d0[20]):[
+                bm25(title),
+                bm25(body),
+                attribute(pagerank),
+                fieldMatch(title).proximity,
+                query(user_affinity),
+                ...
+            ]
+        }
+        
+        first-phase {
+            expression: onnx(ranking_model).score
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Comparison
+
+| Aspect | Stateless Evaluation | Ranking Evaluation |
+|--------|---------------------|--------------------|
+| **Location** | Container nodes | Content nodes |
+| **Document Access** | No | Yes (attributes, features) |
+| **Use Case** | Preprocessing, embeddings | Document ranking |
+| **API** | REST, Java API | Rank profiles |
+| **Latency** | Independent of corpus | Per-document evaluation |
+| **Scalability** | Scale containers | Scale content nodes |
+| **Caching** | Application-level | Per-query |
+
+## When to Use Each
+
+### Use Stateless Evaluation When:
+
+<Check>You need to generate embeddings or features before search</Check>
+<Check>Model inputs don't depend on document content</Check>
+<Check>You want to expose model predictions via REST API</Check>
+<Check>Processing is independent of corpus size</Check>
+<Check>You need batch prediction capabilities</Check>
+
+### Use Ranking Evaluation When:
+
+<Check>Model needs access to document attributes</Check>
+<Check>Scoring documents during search</Check>
+<Check>Implementing learning-to-rank</Check>
+<Check>Using cross-encoders for reranking</Check>
+<Check>Combining model scores with other ranking features</Check>
+
+## Hybrid Approaches
+
+Combine both approaches for optimal performance:
+
+```
+schema hybrid {
+    document hybrid {
+        field text type string {}
+        field embedding type tensor<float>(x[384]) {
+            indexing: input text | embed | attribute
+            attribute {
+                distance-metric: angular
+            }
+        }
+    }
+    
+    onnx-model reranker {
+        file: models/reranker.onnx
+    }
+    
+    rank-profile hybrid_search {
+        inputs {
+            query(q_embedding) tensor<float>(x[384])
+        }
+        
+        # First: vector similarity (uses stateless-generated embeddings)
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+        
+        # Second: cross-encoder reranking (uses ranking evaluation)
+        second-phase {
+            expression: onnx(reranker).score
+            rerank-count: 100
+        }
+    }
+}
+```
+
+Query workflow:
+```python
+import requests
+
+# 1. Generate query embedding (stateless)
+response = requests.post(
+    'http://localhost:8080/model-evaluation/v1/embedder/eval',
+    data={'text': 'search query'}
+)
+query_embedding = response.json()
+
+# 2. Search with embedding and reranking (ranking evaluation)
+results = requests.post(
+    'http://localhost:8080/search/',
+    json={
+        'yql': 'select * from hybrid where ...',
+        'ranking': 'hybrid_search',
+        'input.query(q_embedding)': query_embedding
+    }
+)
+```
+
+## Performance Considerations
+
+### Stateless Evaluation
+
+- **Caching**: Implement application-level caching for repeated inputs
+- **Batching**: Process multiple requests together when possible
+- **Container Scaling**: Add container nodes to handle more traffic
+
+### Ranking Evaluation
+
+- **Rerank Count**: Limit second-phase evaluation with `rerank-count`
+- **Content Scaling**: Add content nodes to distribute ranking load
+- **Model Size**: Keep models small for per-document evaluation
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ONNX Models" icon="brain" href="/ml/onnx-models">
+    Deploy ONNX models in Vespa
+  </Card>
+  <Card title="Embeddings" icon="vector-square" href="/ml/embeddings">
+    Configure embedding models
+  </Card>
+  <Card title="RAG Applications" icon="robot" href="/ml/rag-applications">
+    Build retrieval-augmented generation
+  </Card>
+  <Card title="Ranking" icon="ranking-star">
+    Advanced ranking strategies
+  </Card>
+</CardGroup>

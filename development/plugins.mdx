@@ -1,0 +1,631 @@
+---
+title: Creating Plugins and Bundles
+description: Package and deploy custom components as OSGi bundles in Vespa
+---
+
+Vespa components (searchers, document processors, handlers) are packaged as OSGi bundles and deployed to the container. This guide covers creating, building, and deploying custom component bundles.
+
+## Overview
+
+Vespa uses OSGi bundles to:
+- **Isolate components**: Each bundle has its own classpath
+- **Manage dependencies**: Explicit import/export of packages
+- **Enable hot deployment**: Update components without restarting
+- **Version management**: Multiple versions can coexist
+
+## Project Structure
+
+A typical Vespa plugin project:
+
+```
+my-plugin/
+├── pom.xml
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/
+│   │   │       └── example/
+│   │   │           ├── MySearcher.java
+│   │   │           ├── MyDocProc.java
+│   │   │           └── MyHandler.java
+│   │   └── resources/
+│   │       └── configdefinitions/
+│   │           └── my-config.def
+│   └── test/
+│       └── java/
+│           └── com/
+│               └── example/
+│                   └── MySearcherTest.java
+└── target/
+    └── my-plugin-1.0.0-deploy.jar
+```
+
+## Maven Configuration
+
+### Basic POM Setup
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>my-plugin</artifactId>
+    <version>1.0.0</version>
+    <packaging>container-plugin</packaging>
+
+    <properties>
+        <vespa.version>8.350.43</vespa.version>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+    </properties>
+
+    <dependencies>
+        <!-- Vespa dependencies -->
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>container</artifactId>
+            <version>${vespa.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <!-- For search components -->
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>container-search</artifactId>
+            <version>${vespa.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <!-- For document processing -->
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>docproc</artifactId>
+            <version>${vespa.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.9.3</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>com.yahoo.vespa</groupId>
+                <artifactId>bundle-plugin</artifactId>
+                <version>${vespa.version}</version>
+                <extensions>true</extensions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+### Bundle Plugin
+
+The `bundle-plugin` automatically generates the OSGi manifest from your code:
+
+```xml
+<plugin>
+    <groupId>com.yahoo.vespa</groupId>
+    <artifactId>bundle-plugin</artifactId>
+    <version>${vespa.version}</version>
+    <extensions>true</extensions>
+    <configuration>
+        <!-- Optional: Specify bundle activator -->
+        <bundleActivator>com.example.MyBundleActivator</bundleActivator>
+        
+        <!-- Optional: Control warnings -->
+        <suppressWarningPublicApi>false</suppressWarningPublicApi>
+        <failOnWarnings>false</failOnWarnings>
+    </configuration>
+</plugin>
+```
+
+## Dependency Management
+
+### Provided Dependencies
+
+<Note>
+Use `provided` scope for all Vespa artifacts to avoid bundling them:
+</Note>
+
+```xml
+<dependency>
+    <groupId>com.yahoo.vespa</groupId>
+    <artifactId>container</artifactId>
+    <scope>provided</scope>
+</dependency>
+```
+
+### Compile Dependencies
+
+Libraries in `compile` scope are bundled with your plugin:
+
+```xml
+<!-- This will be included in the bundle -->
+<dependency>
+    <groupId>com.google.guava</groupId>
+    <artifactId>guava</artifactId>
+    <version>32.1.2-jre</version>
+    <scope>compile</scope>
+</dependency>
+```
+
+### Excluding Transitive Dependencies
+
+```xml
+<dependency>
+    <groupId>com.example</groupId>
+    <artifactId>some-library</artifactId>
+    <version>1.0.0</version>
+    <exclusions>
+        <exclusion>
+            <groupId>org.unwanted</groupId>
+            <artifactId>unwanted-dep</artifactId>
+        </exclusion>
+    </exclusions>
+</dependency>
+```
+
+## Component Examples
+
+### Simple Searcher Plugin
+
+```java
+package com.example;
+
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.searchchain.Execution;
+
+public class SimpleSearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Add custom query processing
+        query.trace("SimpleSearcher activated", 2);
+        
+        Result result = execution.search(query);
+        
+        // Add custom result processing
+        result.hits().forEach(hit -> 
+            hit.setField("plugin_version", "1.0.0")
+        );
+        
+        return result;
+    }
+}
+```
+
+### Document Processor Plugin
+
+```java
+package com.example;
+
+import com.yahoo.docproc.SimpleDocumentProcessor;
+import com.yahoo.document.DocumentPut;
+
+public class SimpleDocProc extends SimpleDocumentProcessor {
+
+    @Override
+    public void process(DocumentPut put) {
+        var doc = put.getDocument();
+        
+        // Add processing timestamp
+        doc.setFieldValue("processed_at", 
+                         System.currentTimeMillis());
+        
+        // Add processor identifier
+        doc.setFieldValue("processor", "SimpleDocProc");
+    }
+}
+```
+
+### HTTP Handler Plugin
+
+```java
+package com.example;
+
+import com.yahoo.container.jdisc.HttpRequest;
+import com.yahoo.container.jdisc.HttpResponse;
+import com.yahoo.container.jdisc.ThreadedHttpRequestHandler;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.concurrent.Executor;
+
+public class SimpleHandler extends ThreadedHttpRequestHandler {
+
+    public SimpleHandler(Executor executor) {
+        super(executor);
+    }
+
+    @Override
+    public HttpResponse handle(HttpRequest request) {
+        return new JsonResponse();
+    }
+    
+    private static class JsonResponse extends HttpResponse {
+        JsonResponse() {
+            super(200);
+        }
+        
+        @Override
+        public void render(OutputStream output) throws IOException {
+            output.write("{\"status\":\"ok\"}".getBytes());
+        }
+        
+        @Override
+        public String getContentType() {
+            return "application/json";
+        }
+    }
+}
+```
+
+## Building the Bundle
+
+<Steps>
+  <Step title="Build with Maven">
+    ```bash
+    mvn clean package
+    ```
+    
+    This creates `target/my-plugin-1.0.0-deploy.jar`
+  </Step>
+
+  <Step title="Verify the Bundle">
+    ```bash
+    jar -tf target/my-plugin-1.0.0-deploy.jar
+    ```
+    
+    Check that your classes and the OSGi manifest are present:
+    ```
+    META-INF/MANIFEST.MF
+    com/example/MySearcher.class
+    com/example/MyDocProc.class
+    com/example/MyHandler.class
+    ```
+  </Step>
+
+  <Step title="Inspect the Manifest">
+    ```bash
+    jar -xf target/my-plugin-1.0.0-deploy.jar META-INF/MANIFEST.MF
+    cat META-INF/MANIFEST.MF
+    ```
+    
+    Look for OSGi headers like `Export-Package` and `Import-Package`
+  </Step>
+</Steps>
+
+## Deployment
+
+### Application Package Structure
+
+```
+application/
+├── services.xml
+├── schemas/
+│   └── myschema.sd
+└── components/
+    └── my-plugin-1.0.0-deploy.jar
+```
+
+### services.xml Configuration
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<services version="1.0">
+  <container id="default" version="1.0">
+    
+    <!-- Search chain with custom searcher -->
+    <search>
+      <chain id="default" inherits="vespa">
+        <searcher id="com.example.SimpleSearcher" 
+                  bundle="my-plugin"/>
+      </chain>
+    </search>
+    
+    <!-- Document processing with custom processor -->
+    <document-processing>
+      <chain id="default">
+        <documentprocessor id="com.example.SimpleDocProc" 
+                          bundle="my-plugin"/>
+      </chain>
+    </document-processing>
+    
+    <!-- Custom HTTP handler -->
+    <handler id="com.example.SimpleHandler" 
+             bundle="my-plugin">
+      <binding>http://*/custom/*</binding>
+    </handler>
+    
+    <nodes>
+      <node hostalias="node1"/>
+    </nodes>
+  </container>
+</services>
+```
+
+### Deploy the Application
+
+```bash
+vestpa deploy application/
+```
+
+## Configuration Integration
+
+### Define Configuration Schema
+
+Create `src/main/resources/configdefinitions/my-plugin.def`:
+
+```
+namespace=com.example
+
+# Maximum number of results
+maxResults int default=100
+
+# Enable debug mode
+enableDebug bool default=false
+
+# Service endpoint
+serviceUrl string default="http://localhost:8080"
+
+# Timeout in milliseconds
+timeout int default=5000
+```
+
+### Use Configuration in Component
+
+```java
+package com.example;
+
+import com.yahoo.search.Searcher;
+import com.example.MyPluginConfig;
+
+public class ConfiguredSearcher extends Searcher {
+    private final int maxResults;
+    private final boolean debugEnabled;
+    private final String serviceUrl;
+    
+    public ConfiguredSearcher(MyPluginConfig config) {
+        this.maxResults = config.maxResults();
+        this.debugEnabled = config.enableDebug();
+        this.serviceUrl = config.serviceUrl();
+    }
+    
+    @Override
+    public Result search(Query query, Execution execution) {
+        if (debugEnabled) {
+            query.trace("ConfiguredSearcher with maxResults=" + 
+                       maxResults, 1);
+        }
+        
+        Result result = execution.search(query);
+        
+        // Trim results if needed
+        while (result.hits().size() > maxResults) {
+            result.hits().remove(result.hits().size() - 1);
+        }
+        
+        return result;
+    }
+}
+```
+
+### Override Configuration in services.xml
+
+```xml
+<searcher id="com.example.ConfiguredSearcher" bundle="my-plugin">
+  <config name="com.example.my-plugin">
+    <maxResults>50</maxResults>
+    <enableDebug>true</enableDebug>
+    <serviceUrl>https://api.example.com</serviceUrl>
+  </config>
+</searcher>
+```
+
+## OSGi Manifest Details
+
+The bundle plugin generates the OSGi manifest based on your code. Key headers:
+
+### Export-Package
+
+Packages your bundle exposes to others:
+
+```
+Export-Package: com.example.api;version="1.0.0"
+```
+
+### Import-Package
+
+Packages your bundle needs from the platform:
+
+```
+Import-Package: com.yahoo.search;version="[8,9)",
+                com.yahoo.component;version="[8,9)"
+```
+
+### Bundle-SymbolicName
+
+Unique identifier for your bundle:
+
+```
+Bundle-SymbolicName: my-plugin
+```
+
+## Advanced Bundle Features
+
+### Bundle Activator
+
+For initialization logic when the bundle starts:
+
+```java
+package com.example;
+
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+
+public class MyBundleActivator implements BundleActivator {
+
+    @Override
+    public void start(BundleContext context) {
+        System.out.println("Bundle started: " + 
+                          context.getBundle().getSymbolicName());
+    }
+
+    @Override
+    public void stop(BundleContext context) {
+        System.out.println("Bundle stopped");
+    }
+}
+```
+
+Configure in `pom.xml`:
+
+```xml
+<plugin>
+    <groupId>com.yahoo.vespa</groupId>
+    <artifactId>bundle-plugin</artifactId>
+    <configuration>
+        <bundleActivator>com.example.MyBundleActivator</bundleActivator>
+    </configuration>
+</plugin>
+```
+
+### Multiple Components in One Bundle
+
+```java
+// All in the same bundle
+package com.example;
+
+public class SearchPlugin extends Searcher { /* ... */ }
+public class FeedPlugin extends SimpleDocumentProcessor { /* ... */ }
+public class ApiPlugin extends ThreadedHttpRequestHandler { /* ... */ }
+```
+
+All are available once the bundle is deployed.
+
+## Testing
+
+### Unit Tests
+
+```java
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class SimpleSearcherTest {
+    
+    @Test
+    public void testSearcher() {
+        SimpleSearcher searcher = new SimpleSearcher();
+        Query query = new Query("test");
+        
+        Execution execution = createMockExecution();
+        Result result = searcher.search(query, execution);
+        
+        assertNotNull(result);
+        assertTrue(result.hits().get(0).fields()
+                  .containsKey("plugin_version"));
+    }
+}
+```
+
+### Integration Tests
+
+```java
+import com.yahoo.application.Application;
+import com.yahoo.application.container.Search;
+
+public class IntegrationTest {
+    
+    @Test
+    public void testWithApplication() throws Exception {
+        try (Application app = Application.fromApplicationPackage(
+                Paths.get("src/test/application"))) {
+            
+            Search search = app.getJDisc("default").search();
+            Result result = search.process(
+                new Query("?query=test"));
+            
+            assertEquals(200, result.getHitCount());
+        }
+    }
+}
+```
+
+## Troubleshooting
+
+<Accordion title="ClassNotFoundException">
+  Check that:
+  - The class is in the bundle JAR
+  - Import-Package includes required packages
+  - Bundle is properly deployed to `components/`
+  
+  Verify with:
+  ```bash
+  jar -tf target/my-plugin-1.0.0-deploy.jar | grep MyClass
+  ```
+</Accordion>
+
+<Accordion title="NoClassDefFoundError">
+  Missing dependency. Either:
+  - Add the dependency with `compile` scope to bundle it
+  - Use `provided` scope and ensure it's available in the platform
+  
+  Check imports in manifest:
+  ```bash
+  unzip -p target/my-plugin-1.0.0-deploy.jar META-INF/MANIFEST.MF
+  ```
+</Accordion>
+
+<Accordion title="Component Not Found">
+  Verify:
+  - Bundle artifact ID matches reference in `services.xml`
+  - Component ID is the fully qualified class name
+  - Bundle is in the `components/` directory
+  
+  Check deployment:
+  ```bash
+  vespa status
+  vespa log --level error
+  ```
+</Accordion>
+
+## Best Practices
+
+<Note>
+- **Keep bundles focused**: One responsibility per bundle
+- **Version carefully**: Use semantic versioning
+- **Test thoroughly**: Unit and integration tests
+- **Document configuration**: Provide clear config examples
+- **Monitor performance**: Profile component behavior
+- **Handle errors gracefully**: Don't crash the container
+</Note>
+
+## Bundle Plugin Details
+
+The Vespa bundle plugin (from `~/workspace/source/bundle-plugin`) automatically:
+- Analyzes your compiled classes
+- Generates OSGi Import-Package headers
+- Generates OSGi Export-Package headers
+- Validates dependency scope correctness
+- Warns about non-public API usage
+- Creates a deployable JAR with OSGi metadata
+
+## Next Steps
+
+- Review [Searchers](/development/searchers) for query components
+- Learn [Document Processors](/development/document-processors) for feed components
+- Explore [HTTP Handlers](/development/handlers) for custom endpoints
+- Read about Vespa configuration system for advanced config

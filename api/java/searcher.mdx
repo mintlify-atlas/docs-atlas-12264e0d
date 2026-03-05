@@ -1,0 +1,557 @@
+---
+title: Searcher API
+description: Build custom search logic with the Searcher API
+---
+
+The Searcher API allows you to implement custom search logic in Vespa. Searchers are components that process queries and results in a chain of responsibility pattern.
+
+## Overview
+
+Searchers participate in search chains where they:
+
+- **Modify queries** before passing them to the next searcher (query rewriting)
+- **Process results** before returning them (result processing)
+- **Federate** to multiple backends in parallel
+- **Generate results** from external sources
+- **Implement workflows** with multiple search calls
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:12`
+
+## Basic Searcher
+
+Every searcher extends the `Searcher` class and implements the `search` method:
+
+```java
+package com.example;
+
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.searchchain.Execution;
+
+public class SimpleSearcher extends Searcher {
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Process the query, then pass it down the chain
+        Result result = execution.search(query);
+        // Process the result before returning
+        return result;
+    }
+}
+```
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:89`
+
+## Searcher Types
+
+### Query Processor
+
+Modifies the query before passing it down:
+
+```java
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.searchchain.Execution;
+
+public class QueryRewriter extends Searcher {
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Modify the query
+        String originalQuery = query.getModel().getQueryString();
+        if (originalQuery.contains("fix")) {
+            query.getModel().setQueryString(originalQuery.replace("fix", "repair"));
+        }
+
+        // Add a ranking parameter
+        query.getRanking().setProfile("bm25");
+
+        // Pass the modified query down the chain
+        return execution.search(query);
+    }
+}
+```
+
+### Result Processor
+
+Modifies the result after getting it from downstream:
+
+```java
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.result.Hit;
+import com.yahoo.search.searchchain.Execution;
+
+public class ResultEnricher extends Searcher {
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Get result from downstream
+        Result result = execution.search(query);
+
+        // Process each hit
+        for (Hit hit : result.hits()) {
+            // Add custom field to each hit
+            hit.setField("customField", computeValue(hit));
+        }
+
+        return result;
+    }
+
+    private String computeValue(Hit hit) {
+        return "enriched-" + hit.getId();
+    }
+}
+```
+
+Example from: `application/src/test/java/com/yahoo/application/container/searchers/AddHitSearcher.java:10`
+
+### Result Source
+
+Creates results without calling downstream searchers:
+
+```java
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.result.Hit;
+import com.yahoo.search.searchchain.Execution;
+
+public class CustomBackendSearcher extends Searcher {
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Create a new result
+        Result result = new Result(query);
+
+        // Fetch data from external source (database, API, etc.)
+        for (int i = 0; i < 10; i++) {
+            Hit hit = new Hit("custom-" + i);
+            hit.setField("title", "Custom result " + i);
+            hit.setField("url", "http://example.com/" + i);
+            hit.setRelevance(1.0 - (i * 0.1));
+            result.hits().add(hit);
+        }
+
+        result.setTotalHitCount(100); // Total available results
+        return result;
+    }
+}
+```
+
+### Federator
+
+Searches multiple backends in parallel:
+
+```java
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.searchchain.Execution;
+import com.yahoo.search.searchchain.AsyncExecution;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
+
+public class FederatingSearcher extends Searcher {
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Create async executions for parallel search
+        AsyncExecution backend1 = new AsyncExecution("backend1", execution);
+        AsyncExecution backend2 = new AsyncExecution("backend2", execution);
+
+        // Start searches in parallel
+        backend1.search(query);
+        backend2.search(query);
+
+        // Get results (blocks until complete)
+        Result result1 = backend1.get(1000, TimeUnit.MILLISECONDS);
+        Result result2 = backend2.get(1000, TimeUnit.MILLISECONDS);
+
+        // Merge results
+        Result merged = new Result(query);
+        merged.hits().addAll(result1.hits().asUnorderedHits());
+        merged.hits().addAll(result2.hits().asUnorderedHits());
+
+        return merged;
+    }
+}
+```
+
+## Searcher Lifecycle
+
+<Steps>
+  <Step title="Construction">
+    The container creates the searcher instance and injects dependencies via constructor.
+
+    ```java
+    public class ConfiguredSearcher extends Searcher {
+        private final String apiKey;
+
+        @Inject
+        public ConfiguredSearcher(MyConfig config) {
+            this.apiKey = config.apiKey();
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="In Service">
+    The `search()` method is called by multiple threads concurrently. Keep shared state immutable.
+  </Step>
+
+  <Step title="Deconstruction">
+    Override `deconstruct()` to clean up resources when the searcher is replaced.
+
+    ```java
+    @Override
+    public void deconstruct() {
+        // Close connections, release resources
+        super.deconstruct();
+    }
+    ```
+  </Step>
+</Steps>
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:41`
+
+## Working with Queries
+
+### Query Properties
+
+```java
+@Override
+public Result search(Query query, Execution execution) {
+    // Get query string
+    String queryString = query.getModel().getQueryString();
+
+    // Get custom properties
+    String customParam = query.properties().getString("myParam");
+    int limit = query.properties().getInteger("limit", 10); // with default
+
+    // Set properties
+    query.properties().set("newParam", "value");
+
+    // Access ranking
+    query.getRanking().setProfile("bm25");
+    query.getRanking().setQueryCache(false);
+
+    return execution.search(query);
+}
+```
+
+### Query Tracing
+
+```java
+@Override
+public Result search(Query query, Execution execution) {
+    query.trace("Starting custom processing", 2);
+
+    // Do work
+    String modified = processQuery(query.getModel().getQueryString());
+    query.trace("Modified query to: " + modified, 3);
+
+    query.getModel().setQueryString(modified);
+    return execution.search(query);
+}
+```
+
+## Working with Results
+
+### Adding Hits
+
+```java
+import com.yahoo.search.result.Hit;
+
+@Override
+public Result search(Query query, Execution execution) {
+    Result result = execution.search(query);
+
+    // Create and add a hit
+    Hit hit = new Hit("custom-id", 1.0); // id and relevance
+    hit.setField("title", "Custom Title");
+    hit.setField("description", "Custom description");
+    result.hits().add(hit);
+
+    return result;
+}
+```
+
+Example from: `application/src/test/java/com/yahoo/application/container/searchers/AddHitSearcher.java:19`
+
+### Filtering Hits
+
+```java
+@Override
+public Result search(Query query, Execution execution) {
+    Result result = execution.search(query);
+
+    // Remove hits based on criteria
+    result.hits().removeIf(hit ->
+        hit.getField("language") != null &&
+        !hit.getField("language").equals("en")
+    );
+
+    return result;
+}
+```
+
+### Reordering Hits
+
+```java
+import java.util.Comparator;
+
+@Override
+public Result search(Query query, Execution execution) {
+    Result result = execution.search(query);
+
+    // Sort by custom field
+    result.hits().sort(Comparator.comparing(
+        hit -> (String) hit.getField("customField")
+    ));
+
+    return result;
+}
+```
+
+## Fill Operations
+
+The `fill()` method fetches additional fields for hits:
+
+```java
+@Override
+public Result search(Query query, Execution execution) {
+    Result result = execution.search(query);
+
+    // Ensure hits have the 'full' summary class filled
+    ensureFilled(result, "full", execution);
+
+    // Now all hits have full summary fields available
+    return result;
+}
+
+@Override
+public void fill(Result result, String summaryClass, Execution execution) {
+    // Custom fill logic if needed
+    // Otherwise just delegate:
+    execution.fill(result, summaryClass);
+}
+```
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:139`
+
+## Error Handling
+
+### Expected Errors
+
+Return errors in the result:
+
+```java
+import com.yahoo.search.result.ErrorMessage;
+
+@Override
+public Result search(Query query, Execution execution) {
+    if (query.getModel().getQueryString() == null) {
+        return new Result(query,
+            ErrorMessage.createBadRequest("Query string is required"));
+    }
+
+    Result result = execution.search(query);
+
+    // Add error if something goes wrong
+    if (result.getTotalHitCount() == 0) {
+        result.hits().addError(ErrorMessage.createNoBackendsInService(
+            "No results available"));
+    }
+
+    return result;
+}
+```
+
+### Unexpected Errors
+
+Throw runtime exceptions:
+
+```java
+@Override
+public Result search(Query query, Execution execution) {
+    if (!isInitialized()) {
+        throw new RuntimeException("Searcher not properly initialized");
+    }
+    return execution.search(query);
+}
+```
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:117`
+
+## Configuration
+
+Searchers can receive configuration through dependency injection:
+
+```java
+import com.yahoo.search.Searcher;
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.searchchain.Execution;
+
+public class ConfigurableSearcher extends Searcher {
+    private final String endpoint;
+    private final int timeout;
+
+    @Inject
+    public ConfigurableSearcher(MySearcherConfig config) {
+        this.endpoint = config.endpoint();
+        this.timeout = config.timeout();
+    }
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Use configuration
+        String url = endpoint + "/search?q=" + query.getModel().getQueryString();
+        return execution.search(query);
+    }
+}
+```
+
+## Thread Safety
+
+<Warning>
+Searchers are called by multiple threads concurrently. All mutable shared state must be thread-safe.
+</Warning>
+
+```java
+public class ThreadSafeSearcher extends Searcher {
+    // Safe: Immutable, built in constructor
+    private final Map<String, String> config;
+
+    // Unsafe: Mutable shared state
+    private int counter = 0; // DON'T DO THIS
+
+    public ThreadSafeSearcher(MyConfig config) {
+        Map<String, String> temp = new HashMap<>();
+        temp.put("key", config.value());
+        this.config = Collections.unmodifiableMap(temp);
+    }
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Safe: Read-only access to immutable data
+        String value = config.get("key");
+
+        // Safe: Local variables
+        int localCounter = 0;
+
+        return execution.search(query);
+    }
+}
+```
+
+Source: `container-search/src/main/java/com/yahoo/search/Searcher.java:37`
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Call execution.search()">
+    Unless you're a source searcher, always call `execution.search(query)` to continue the chain.
+
+    ```java
+    // Good
+    public Result search(Query query, Execution execution) {
+        modifyQuery(query);
+        return execution.search(query);
+    }
+
+    // Bad - breaks the chain
+    public Result search(Query query, Execution execution) {
+        modifyQuery(query);
+        return new Result(query);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Respect Hit Windows">
+    Searchers must return at least `hits` number of hits starting at `offset`.
+
+    ```java
+    public Result search(Query query, Execution execution) {
+        int hits = query.getHits();
+        int offset = query.getOffset();
+
+        // Ensure you return the right window
+        Result result = execution.search(query);
+        // Don't remove hits that would make result < hits
+        return result;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use Tracing for Debugging">
+    Add trace messages at appropriate levels:
+
+    ```java
+    public Result search(Query query, Execution execution) {
+        query.trace("MySearcher processing", 2);
+        // Level 2: High-level operations
+        // Level 3-5: Detailed debugging
+        // Level 6+: Very detailed
+
+        if (query.getTraceLevel() >= 3) {
+            query.trace("Detailed info: " + someDetail, 3);
+        }
+
+        return execution.search(query);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Handle Timeouts">
+    Check query timeout and return early if time is running out:
+
+    ```java
+    public Result search(Query query, Execution execution) {
+        long timeout = query.getTimeout();
+        long startTime = System.currentTimeMillis();
+
+        Result result = execution.search(query);
+
+        // Check if we have time for additional processing
+        if (System.currentTimeMillis() - startTime > timeout - 100) {
+            return result; // Skip extra processing
+        }
+
+        enrichResults(result);
+        return result;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Testing Searchers
+
+```java
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.searchchain.Execution;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class MySearcherTest {
+    @Test
+    void testQueryRewriting() {
+        MySearcher searcher = new MySearcher();
+        Query query = new Query("?query=test");
+        Execution execution = new Execution(
+            Execution.Context.createContextStub());
+
+        Result result = searcher.search(query, execution);
+
+        assertNotNull(result);
+        assertEquals("modified-test", query.getModel().getQueryString());
+    }
+}
+```
+
+## Related APIs
+
+- [jDisc Container](/api/java/container) - Container runtime environment
+- [Document Processor API](/api/java/document-processor) - Document processing pipeline
+- [Component API](/api/java/component) - Base component interfaces

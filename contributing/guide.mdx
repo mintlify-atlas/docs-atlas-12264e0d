@@ -1,0 +1,199 @@
+---
+title: 'Contributing to Vespa'
+description: 'Learn how to contribute to Vespa, including open development practices, licensing, and community resources'
+---
+
+Contributions to [Vespa](https://github.com/vespa-engine/vespa), [Vespa system tests](https://github.com/vespa-engine/system-test), [Vespa samples](https://github.com/vespa-engine/sample-apps), and the [Vespa documentation](https://github.com/vespa-engine/documentation) are welcome.
+
+## Open Development
+
+All work on Vespa happens directly on GitHub using the [GitHub flow model](https://docs.github.com/en/get-started/using-github/github-flow).
+
+<Note>
+We release the master branch **four times a week** (Monday through Thursday), and you should expect it to always work.
+</Note>
+
+The continuous build of Vespa is available at [factory.vespa.ai](https://factory.vespa.ai), where you can follow the fate of each commit.
+
+### Code Review Process
+
+All pull requests must be approved by a [Vespa Committer](https://github.com/orgs/vespa-engine/people). You can find a suitable reviewer in the OWNERS file upward in the source tree from where you are making the change.
+
+<Note>
+OWNERS have a special responsibility for ensuring the long-term integrity of a portion of the code.
+</Note>
+
+### Becoming a Committer
+
+The way to become a committer (and OWNER) is to make quality contributions to an area of the code. See [GOVERNANCE.md](https://github.com/vespa-engine/vespa/blob/master/GOVERNANCE.md) for more details.
+
+<Steps>
+  <Step title="Start Contributing">
+    Begin by creating pull requests that demonstrate quality and understanding of the codebase.
+  </Step>
+  
+  <Step title="Build Trust">
+    Continue making approved PRs and building trust with the community through your contributions.
+  </Step>
+  
+  <Step title="Get Nominated">
+    When sufficient trust is established, any current Vespa Committer can nominate you to the Vespa Board for the committer role.
+  </Step>
+</Steps>
+
+## Getting Started
+
+### Development Environment
+
+C++ and Java building is supported on AlmaLinux 8. The Java source can also be built on any platform having Java 17 and Maven 3.8+ installed.
+
+<Accordion title="Setup on AlmaLinux 8">
+Use the complete development environment guide using Docker for building Vespa, running unit tests and system tests:
+[Vespa development on AlmaLinux 8](https://github.com/vespa-engine/docker-image-dev#vespa-development-on-almalinux-8)
+</Accordion>
+
+<Accordion title="Setup Java Environment on Mac">
+1. Install dependencies through [Homebrew](https://brew.sh/):
+
+```bash
+brew install jenv mvnvm openjdk@17
+```
+
+2. On ARM Macs (M1, M2, etc.), install Intel compatibility:
+
+```bash
+softwareupdate --install-rosetta
+```
+
+3. Symlink the JDK:
+
+```bash
+sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+```
+
+4. Configure your shell (for zsh):
+
+```bash
+echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(jenv init -)"' >> ~/.zshrc
+eval "$(jenv init -)"
+jenv enable-plugin export
+exec $SHELL -l
+```
+
+5. Add JDK17 to jEnv:
+
+```bash
+jenv add $(/usr/libexec/java_home -v 17)
+```
+
+6. Verify configuration:
+
+```bash
+mvn -v
+```
+</Accordion>
+
+### Building Java Modules
+
+If you only need to build the Java modules:
+
+```bash
+export MAVEN_OPTS="-Xms128m -Xmx1024m"
+./bootstrap.sh java
+mvn install --threads 1C
+```
+
+### Understanding the Codebase
+
+- See [Code-map.md](https://github.com/vespa-engine/vespa/blob/master/Code-map.md) for an overview of Vespa modules
+- Each module has its own README with more details
+- Check [TODO.md](https://github.com/vespa-engine/vespa/blob/master/TODO.md) for suggested improvements
+
+## Issues and Feature Requests
+
+We track issues in [GitHub issues](https://github.com/vespa-engine/vespa/issues). It is fine to submit issues for:
+
+- Bug reports
+- Feature requests
+- Ideas and suggestions
+- Questions and discussions
+
+You don't need to intend to work on an issue to submit it.
+
+## Community Resources
+
+<CardGroup cols={2}>
+  <Card title="Slack" icon="slack" href="http://slack.vespa.ai">
+    Join our Slack channel to ask questions, share experiences, and help others
+  </Card>
+  
+  <Card title="Stack Overflow" icon="stack-overflow" href="https://stackoverflow.com/questions/tagged/vespa">
+    Browse questions tagged with "vespa" or ask your own
+  </Card>
+  
+  <Card title="Blog" icon="newspaper" href="https://blog.vespa.ai">
+    Follow the Vespa Blog for feature updates and use cases
+  </Card>
+  
+  <Card title="Sample Apps" icon="github" href="https://github.com/vespa-engine/sample-apps">
+    Explore sample applications to learn Vespa patterns
+  </Card>
+</CardGroup>
+
+## License and Copyright
+
+<Warning>
+All code and documentation you submit will be licensed under the **Apache 2.0 license**.
+</Warning>
+
+If you add new files, you are welcome to use your own copyright. The license confirmation is included in the pull request template:
+
+> I confirm that this contribution is made under the terms of the license found in the root directory of this repository's source tree and that I have the authority necessary to make this contribution on behalf of its copyright owner.
+
+## Testing
+
+### Shell Script Tests
+
+Shell scripts are tested with [BATS](https://bats-core.readthedocs.io/en/stable/).
+
+<Accordion title="Running BATS Tests on Mac">
+1. Install the testing framework and plugins:
+
+```bash
+brew install node
+sudo npm install -g bats bats-assert bats-support bats-mock
+```
+
+2. Export the plugin path:
+
+```bash
+export BATS_PLUGIN_PATH="$(npm root -g)"
+```
+
+3. Run all tests from the repository root:
+
+```bash
+bats -r .
+```
+
+4. Run a specific test:
+
+```bash
+bats test_dir/test_name.bats
+```
+
+Tests can also be run in IntelliJ IDEA with the [BashSupport Pro](https://plugins.jetbrains.com/plugin/13841-bashsupport-pro) plugin.
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pull Request Process" href="/contributing/pull-requests">
+    Learn how to create and submit pull requests
+  </Card>
+  
+  <Card title="Versioning Guidelines" href="/contributing/versioning">
+    Understand Vespa's semantic versioning and API compatibility
+  </Card>
+</CardGroup>

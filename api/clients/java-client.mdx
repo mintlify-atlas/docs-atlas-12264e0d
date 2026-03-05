@@ -1,0 +1,393 @@
+---
+title: Java Client Libraries
+description: Java client libraries for Vespa operations
+---
+
+Vespa provides several Java client libraries for different use cases. This page covers the general-purpose Java clients included in the `vespaclient-java` module.
+
+## Overview
+
+The Vespa Java client libraries provide command-line tools and APIs for:
+
+- **vespa-feeder**: Feed documents from files
+- **vespa-get**: Retrieve documents by ID
+- **vespa-visit**: Visit and export documents
+- **vespa-stat**: Show content cluster statistics
+
+<Warning>
+For high-performance bulk feeding in Java applications, use the [Feed Client](/api/clients/feed-client) instead of these utilities.
+</Warning>
+
+## Installation
+
+Add the dependency to your Maven project:
+
+```xml pom.xml
+<dependency>
+  <groupId>com.yahoo.vespa</groupId>
+  <artifactId>vespaclient-java</artifactId>
+  <version>${vespa.version}</version>
+</dependency>
+```
+
+For Gradle:
+
+```groovy build.gradle
+implementation 'com.yahoo.vespa:vespaclient-java:${vespa.version}'
+```
+
+## vespa-feeder
+
+The `vespa-feeder` tool feeds documents from XML or JSON files to Vespa.
+
+### Basic Usage
+
+```bash
+# Feed from XML file
+vespa-feeder documents.xml
+
+# Feed from JSON file
+vespa-feeder documents.json
+
+# Feed with custom route
+vespa-feeder --route default documents.xml
+
+# Feed with timeout
+vespa-feeder --timeout 180 documents.xml
+```
+
+### XML Format
+
+Documents in XML format:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<vespafeed>
+  <document documenttype="music" documentid="id:music:music::1">
+    <title>Bohemian Rhapsody</title>
+    <artist>Queen</artist>
+    <year>1975</year>
+  </document>
+  
+  <update documenttype="music" documentid="id:music:music::1">
+    <assign field="year">1975</assign>
+  </update>
+  
+  <remove documentid="id:music:music::1"/>
+</vespafeed>
+```
+
+### JSON Format
+
+Documents in JSON format (same as Document API):
+
+```json
+[
+  {
+    "put": "id:music:music::1",
+    "fields": {
+      "title": "Bohemian Rhapsody",
+      "artist": "Queen",
+      "year": 1975
+    }
+  },
+  {
+    "update": "id:music:music::1",
+    "fields": {
+      "year": { "assign": 1975 }
+    }
+  },
+  {
+    "remove": "id:music:music::1"
+  }
+]
+```
+
+### Options
+
+<Accordion title="vespa-feeder Options">
+| Option | Description | Default |
+|--------|-------------|----------|
+| `--abortondataerror <bool>` | Abort on data errors | true |
+| `--abortonsenderror <bool>` | Abort on send errors | true |
+| `--file <file>` | Input file to read | stdin |
+| `--maxpending <num>` | Max pending operations | 1000 |
+| `--maxpendingsize <bytes>` | Max pending operation size | 1MB |
+| `--route <route>` | Route to use | default |
+| `--timeout <seconds>` | Timeout for operations | 180 |
+| `--trace <level>` | Trace level (0-9) | 0 |
+</Accordion>
+
+## vespa-get
+
+Retrieve documents by their document ID.
+
+### Basic Usage
+
+```bash
+# Get a single document
+vespa-get id:music:music::1
+
+# Get multiple documents
+vespa-get id:music:music::1 id:music:music::2 id:music:music::3
+
+# Get with specific field set
+vespa-get --fieldset "music:title,artist" id:music:music::1
+
+# Get and show full document
+vespa-get --printids id:music:music::1
+```
+
+### Output Format
+
+By default, outputs JSON:
+
+```json
+{
+  "id": "id:music:music::1",
+  "fields": {
+    "title": "Bohemian Rhapsody",
+    "artist": "Queen",
+    "year": 1975
+  }
+}
+```
+
+### Options
+
+<Accordion title="vespa-get Options">
+| Option | Description |
+|--------|-------------|
+| `--fieldset <fields>` | Fields to retrieve |
+| `--printids` | Print document IDs |
+| `--jsonoutput` | Output in JSON format |
+| `--xmloutput` | Output in XML format |
+| `--cluster <name>` | Content cluster name |
+| `--route <route>` | Route to use |
+| `--timeout <seconds>` | Operation timeout |
+</Accordion>
+
+## vespa-visit
+
+Visit (iterate over) documents in a content cluster.
+
+### Basic Usage
+
+```bash
+# Visit all documents
+vespa-visit
+
+# Visit specific document type
+vespa-visit --datahandler music
+
+# Visit with selection
+vespa-visit --selection "music.year > 1980"
+
+# Visit and export to file
+vespa-visit --datahandler music > export.json
+
+# Visit specific bucket
+vespa-visit --bucketstovisit "0x0000000000000001"
+```
+
+### Selection Expressions
+
+Filter documents during visit:
+
+```bash
+# Year range
+vespa-visit --selection "music.year >= 1970 AND music.year < 1980"
+
+# String matching
+vespa-visit --selection "music.artist == 'Queen'"
+
+# Field existence
+vespa-visit --selection "music.rating > 0"
+```
+
+### Export and Backup
+
+Use `vespa-visit` for backups:
+
+```bash
+# Export all documents
+vespa-visit --datahandler music > backup-$(date +%Y%m%d).json
+
+# Export specific time range
+vespa-visit --selection "music.timestamp > 1640000000" > recent.json
+
+# Count documents
+vespa-visit --statistics | grep "Documents visited"
+```
+
+### Options
+
+<Accordion title="vespa-visit Options">
+| Option | Description | Default |
+|--------|-------------|----------|
+| `--datahandler <type>` | Document type to visit | all |
+| `--selection <expr>` | Document selection | none |
+| `--from <timestamp>` | Visit from timestamp | 0 |
+| `--to <timestamp>` | Visit to timestamp | now |
+| `--fieldset <fields>` | Fields to retrieve | all |
+| `--cluster <name>` | Content cluster | default |
+| `--maxpending <num>` | Max pending operations | 1 |
+| `--maxbucketstovisit <num>` | Max buckets | unlimited |
+| `--bucketstovisit <list>` | Specific buckets | all |
+| `--statistics` | Show statistics | false |
+</Accordion>
+
+## vespa-stat
+
+Show statistics about content clusters.
+
+### Basic Usage
+
+```bash
+# Show cluster statistics
+vespa-stat
+
+# Show specific cluster
+vespa-stat --cluster music
+
+# Show with document counts
+vespa-stat --user music
+```
+
+### Output Example
+
+```
+Cluster: music
+  Nodes: 4
+  Documents: 1000000
+  Disk usage: 45.2 GB
+  Memory usage: 8.4 GB
+  Active documents: 1000000
+  Ready documents: 1000000
+  Removed documents: 0
+```
+
+## Using in Java Applications
+
+### Document Operations
+
+While dedicated feed clients are recommended for production use, you can use the HTTP client directly:
+
+```java
+import com.yahoo.vespa.http.client.*;
+import java.net.http.*;
+import java.net.URI;
+
+public class VespaClient {
+    private final HttpClient client;
+    private final String endpoint;
+    
+    public VespaClient(String endpoint) {
+        this.endpoint = endpoint;
+        this.client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_2)
+            .build();
+    }
+    
+    public void putDocument(String docId, String json) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(endpoint + "/document/v1/" + docId))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(json))
+            .build();
+            
+        HttpResponse<String> response = client.send(request,
+            HttpResponse.BodyHandlers.ofString());
+            
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Failed: " + response.body());
+        }
+    }
+    
+    public String getDocument(String docId) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(endpoint + "/document/v1/" + docId))
+            .GET()
+            .build();
+            
+        HttpResponse<String> response = client.send(request,
+            HttpResponse.BodyHandlers.ofString());
+            
+        return response.body();
+    }
+}
+```
+
+<Note>
+For production applications with high throughput requirements, use the [Vespa Feed Client](/api/clients/feed-client) which provides optimized performance, automatic retries, and better error handling.
+</Note>
+
+## Error Handling
+
+### Common Errors
+
+<Accordion title="Connection Refused">
+The Vespa endpoint is not reachable. Check:
+- Is Vespa running?
+- Is the correct host/port specified?
+- Are firewall rules blocking access?
+
+```bash
+vespa status
+```
+</Accordion>
+
+<Accordion title="Document Type Not Found">
+The document type doesn't exist in the schema:
+- Verify schema deployment
+- Check document type name spelling
+- Ensure application is deployed
+
+```bash
+vespa deploy
+```
+</Accordion>
+
+<Accordion title="Timeout Errors">
+Operations are taking too long:
+- Increase timeout: `--timeout 300`
+- Check cluster health: `vespa-stat`
+- Reduce batch size
+</Accordion>
+
+## Performance Considerations
+
+<Warning>
+The `vespaclient-java` tools are designed for operational tasks and moderate data volumes. For high-performance feeding:
+
+- Use the [Vespa Feed Client](/api/clients/feed-client) for Java applications
+- Use the [Vespa CLI feed command](/api/clients/vespa-cli#bulk-feeding) for command-line feeding
+- Both provide significantly better throughput with automatic throttling and parallelism
+</Warning>
+
+### When to Use Each Tool
+
+| Tool | Best For | Throughput |
+|------|----------|------------|
+| vespa-feeder | Small datasets, testing | Low |
+| vespa-get | Individual document retrieval | N/A |
+| vespa-visit | Backups, exports, iteration | Medium |
+| Feed Client | Production bulk feeding | High |
+| CLI feed | Command-line bulk feeding | High |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Feed Client" icon="gauge-high" href="/api/clients/feed-client">
+    High-performance Java feed client
+  </Card>
+  <Card title="Vespa CLI" icon="terminal" href="/api/clients/vespa-cli">
+    Modern command-line interface
+  </Card>
+  <Card title="Document API" icon="file" href="/api/document">
+    Document operations reference
+  </Card>
+  <Card title="Visiting" icon="rotate" href="/operations/visiting">
+    Document visiting guide
+  </Card>
+</CardGroup>

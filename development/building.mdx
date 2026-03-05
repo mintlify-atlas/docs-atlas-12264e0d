@@ -1,0 +1,368 @@
+---
+title: Building Vespa
+description: Build Vespa from source with Java and C++ modules
+---
+
+This guide explains how to build Vespa from source. You don't need to build Vespa to use it, but if you want to contribute or customize the platform, you'll need to build the code.
+
+<Note>
+Vespa consists of approximately 1.7 million lines of code, split equally between Java and C++. Build times can be significant, especially for a full build including C++ components.
+</Note>
+
+## Build Requirements
+
+### For Java Modules
+
+- **Java**: JDK 17 or later
+- **Maven**: Version 3.8 or later
+- **Memory**: At least 1GB RAM for Maven (set via `MAVEN_OPTS`)
+- **Platform**: Any OS supporting Java and Maven
+
+### For C++ Modules
+
+- **Platform**: AlmaLinux 8
+- **CMake**: For C++ build configuration
+- **Compiler**: GCC with C++17 support
+- **Development tools**: Complete C++ toolchain
+
+<Warning>
+C++ building is only supported on AlmaLinux 8. Use the [Vespa development Docker image](https://github.com/vespa-engine/docker-image-dev#vespa-development-on-almalinux-8) for the easiest setup.
+</Warning>
+
+## Building Java Modules
+
+### Quick Start
+
+The fastest way to build Java modules:
+
+```bash
+# Set Maven memory options
+export MAVEN_OPTS="-Xms128m -Xmx1024m"
+
+# Bootstrap the build system
+./bootstrap.sh java
+
+# Build all Java modules in parallel
+mvn install --threads 1C
+```
+
+The `--threads 1C` flag tells Maven to use one thread per CPU core, significantly speeding up the build.
+
+### Bootstrap Script
+
+The `bootstrap.sh` script initializes the build environment. It has several modes:
+
+<CodeGroup>
+```bash Default Mode
+# Build minimal Java modules required to run CMake
+./bootstrap.sh
+# or explicitly:
+./bootstrap.sh default
+```
+
+```bash Java Only
+# Build only Maven plugins (fastest)
+./bootstrap.sh java
+```
+
+```bash Full Mode
+# Build all Java modules required by C++ testing
+./bootstrap.sh full
+```
+
+```bash Wrapper Only
+# Only set up Maven wrapper, don't build
+./bootstrap.sh wrapper
+```
+</CodeGroup>
+
+### What Bootstrap Does
+
+The bootstrap script performs these tasks:
+
+<Steps>
+  <Step title="Set up Maven wrapper">
+    Downloads and configures Maven wrapper (`mvnw`) version 3.9.12, ensuring consistent Maven versions across environments.
+  </Step>
+
+  <Step title="Generate version map">
+    Creates `dist/vtag.map` containing version information for the build.
+  </Step>
+
+  <Step title="Build plugins first">
+    Maven plugins must be built before the main reactor build, as Maven cannot resolve plugin references that are built in the same reactor.
+  </Step>
+
+  <Step title="Build required modules">
+    Depending on the mode, builds the necessary Java modules for subsequent build steps.
+  </Step>
+</Steps>
+
+### Environment Variables
+
+Customize the Maven build with these environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESPA_MAVEN_COMMAND` | `./mvnw` | Maven command to use |
+| `VESPA_MAVEN_EXTRA_OPTS` | (empty) | Additional Maven options |
+| `VESPA_MAVEN_TARGET` | `install` | Maven goal to execute |
+| `MAVEN_OPTS` | (empty) | JVM options for Maven (e.g., `-Xmx1024m`) |
+
+**Example: Custom Maven build**
+```bash
+export MAVEN_OPTS="-Xms256m -Xmx2048m"
+export VESPA_MAVEN_EXTRA_OPTS="-DskipTests"
+export VESPA_MAVEN_TARGET="package"
+./bootstrap.sh java
+mvn install --threads 1C
+```
+
+### Building Specific Modules
+
+To build only specific modules:
+
+```bash
+# Build a single module
+cd container-search
+mvn install
+
+# Build a module and its dependencies
+mvn install --also-make
+
+# Build a module and modules that depend on it
+mvn install --also-make-dependents
+```
+
+### Clean Build
+
+For a completely clean build:
+
+```bash
+# Clean all built artifacts
+mvn clean
+
+# Clean and rebuild
+mvn clean install --threads 1C
+```
+
+## Building C++ Modules
+
+C++ modules are built using CMake. This requires a complete AlmaLinux 8 development environment.
+
+### Setup Development Environment
+
+The recommended approach is using Docker:
+
+```bash
+# Pull the development image
+docker pull vespaengine/vespa-dev-almalinux-8
+
+# Run the development container
+docker run -it -v $(pwd):/vespa vespaengine/vespa-dev-almalinux-8 bash
+```
+
+See the [docker-image-dev repository](https://github.com/vespa-engine/docker-image-dev#vespa-development-on-almalinux-8) for comprehensive setup instructions.
+
+### CMake Build Process
+
+<Steps>
+  <Step title="Bootstrap Java dependencies">
+    C++ modules depend on some Java artifacts:
+
+    ```bash
+    export MAVEN_OPTS="-Xms128m -Xmx1024m"
+    ./bootstrap.sh full
+    mvn install --threads 1C
+    ```
+  </Step>
+
+  <Step title="Configure CMake">
+    ```bash
+    mkdir build
+    cd build
+    cmake ..
+    ```
+
+    Common CMake options:
+    - `-DCMAKE_BUILD_TYPE=Release` - Build optimized binaries
+    - `-DCMAKE_BUILD_TYPE=Debug` - Build with debug symbols
+    - `-DEXCLUDE_TESTS_FROM_ALL=ON` - Don't build tests by default
+  </Step>
+
+  <Step title="Build C++ modules">
+    ```bash
+    # Build all targets
+    make -j$(nproc)
+
+    # Build specific target
+    make searchcore
+    ```
+  </Step>
+</Steps>
+
+### CMake Module Structure
+
+Vespa uses custom CMake functions for defining targets:
+
+<Accordion title="vespa_add_library">
+Defines a library target:
+
+```cmake
+vespa_add_library(mylib STATIC
+  SOURCES
+    src/foo.cpp
+    src/bar.cpp
+  DEPENDS
+    vespalib
+    otherlib
+)
+```
+
+Options:
+- `STATIC` - Static library (default is shared)
+- `OBJECT` - Object library
+- `INTERFACE` - Header-only library
+- `TEST` - Test library (excluded from `all` target)
+- `SOURCES` - Source files
+- `DEPENDS` - Target and library dependencies
+- `OUTPUT_NAME` - Custom library name
+</Accordion>
+
+<Accordion title="vespa_add_executable">
+Defines an executable target:
+
+```cmake
+vespa_add_executable(myapp
+  SOURCES
+    src/main.cpp
+  DEPENDS
+    searchlib
+    vespalib
+)
+```
+
+Options:
+- `TEST` - Test executable
+- `SOURCES` - Source files (required)
+- `DEPENDS` - Dependencies
+- `OUTPUT_NAME` - Custom executable name
+</Accordion>
+
+<Accordion title="vespa_generate_config">
+Generates C++ code from `.def` config files:
+
+```cmake
+vespa_generate_config(mylib path/to/config.def)
+```
+
+This generates config classes from Vespa config definitions.
+</Accordion>
+
+See [README-cmake.md](https://github.com/vespa-engine/vespa/blob/master/README-cmake.md) for complete CMake documentation.
+
+## Testing Shell Scripts
+
+Vespa includes shell scripts tested with [BATS](https://bats-core.readthedocs.io/).
+
+### Setup BATS (macOS)
+
+```bash
+# Install testing framework
+brew install node
+sudo npm install -g bats bats-assert bats-support bats-mock
+
+# Set plugin path
+export BATS_PLUGIN_PATH="$(npm root -g)"
+```
+
+Add the export to your shell profile (`~/.zshrc` or `~/.bashrc`) to make it permanent.
+
+### Running Shell Tests
+
+```bash
+# Run all shell tests
+bats -r .
+
+# Run specific test file
+bats test_dir/test_name.bats
+```
+
+### IntelliJ Integration
+
+Shell tests can be run in IntelliJ IDEA with the [BashSupport Pro](https://plugins.jetbrains.com/plugin/13841-bashsupport-pro) plugin. Ensure `BATS_PLUGIN_PATH` is exported before launching the IDE.
+
+## Continuous Integration
+
+Vespa uses Buildkite for continuous integration:
+
+- **Build status**: Monitor at [factory.vespa.ai](https://factory.vespa.ai)
+- **Badge**: [![Build status](https://badge.buildkite.com/34f7cb35b91da4f929794c5fd7aa722fc15ca0224ad240270b.svg)](https://buildkite.com/vespaai/vespa-engine-vespa)
+- **Releases**: Made from master branch every morning CET, Monday-Thursday
+
+All commits must pass CI checks before merging.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="OutOfMemoryError during Maven build">
+    Increase Maven heap size:
+
+    ```bash
+    export MAVEN_OPTS="-Xms256m -Xmx2048m"
+    ```
+
+    You may need even more memory for a full build.
+  </Accordion>
+
+  <Accordion title="Plugin resolution failures">
+    This usually means plugins weren't built first. Run:
+
+    ```bash
+    ./bootstrap.sh java
+    ```
+
+    Then retry your Maven build.
+  </Accordion>
+
+  <Accordion title="C++ build fails with missing dependencies">
+    Ensure you've built the required Java modules first:
+
+    ```bash
+    ./bootstrap.sh full
+    mvn install --threads 1C
+    ```
+
+    C++ tests require additional Java artifacts.
+  </Accordion>
+
+  <Accordion title="ABI compatibility check failures">
+    If you're modifying public APIs, you need to update the ABI spec:
+
+    1. Read the error message for the exact command to run
+    2. Usually involves running a Maven goal to update the spec
+    3. Commit the updated spec file with your changes
+
+    See [CONTRIBUTING.md](https://github.com/vespa-engine/vespa/blob/master/CONTRIBUTING.md#versioning) for versioning rules.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Tests" icon="flask" href="/development/testing">
+    Learn how to run and write tests
+  </Card>
+
+  <Card title="Code Map" icon="map" href="/development/code-map">
+    Navigate the codebase structure
+  </Card>
+
+  <Card title="Development Overview" icon="code" href="/development/overview">
+    Return to development overview
+  </Card>
+
+  <Card title="CMake Guide" icon="book" href="https://github.com/vespa-engine/vespa/blob/master/README-cmake.md">
+    Detailed CMake documentation
+  </Card>
+</CardGroup>

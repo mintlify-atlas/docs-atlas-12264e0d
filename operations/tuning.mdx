@@ -1,0 +1,574 @@
+---
+title: Performance Tuning
+description: Optimize Vespa performance through configuration tuning and resource allocation
+---
+
+Tuning Vespa involves optimizing resource allocation, thread pools, caching, and query execution to maximize throughput and minimize latency.
+
+## Performance Fundamentals
+
+<CardGroup cols={3}>
+  <Card title="Query Performance" icon="magnifying-glass">
+    Optimize search and ranking latency
+  </Card>
+  <Card title="Feed Performance" icon="upload">
+    Maximize document indexing throughput
+  </Card>
+  <Card title="Resource Efficiency" icon="gauge">
+    Optimize CPU, memory, and disk usage
+  </Card>
+</CardGroup>
+
+## Query Performance Tuning
+
+### Thread Pool Configuration
+
+Optimize container thread pools for query handling:
+
+```xml
+<container version="1.0" id="default">
+  <search/>
+  
+  <!-- Configure search handler threads -->
+  <handler id="com.yahoo.search.handler.SearchHandler">
+    <binding>http://*/search/*</binding>
+  </handler>
+  
+  <nodes>
+    <!-- JVM heap tuning -->
+    <jvm options="-Xms8g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"/>
+  </nodes>
+</container>
+```
+
+### Content Node Tuning
+
+Configure executor threads on content nodes:
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Match (search) executor threads -->
+      <requestthreads>
+        <count>8</count>        <!-- Number of search threads -->
+        <persearch>2</persearch> <!-- Threads per search -->
+      </requestthreads>
+      
+      <!-- Summary (docsum) threads -->
+      <summary>
+        <io>
+          <threads>8</threads>   <!-- Summary fetch threads -->
+        </io>
+      </summary>
+    </searchnode>
+  </tuning>
+  
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+  </nodes>
+</content>
+```
+
+### Monitor Thread Pool Performance
+
+```java
+// Executor metrics to watch (from SearchNodeMetrics.java)
+CONTENT_PROTON_EXECUTOR_MATCH_QUEUESIZE      // Match queue depth
+CONTENT_PROTON_EXECUTOR_MATCH_UTILIZATION    // Match thread utilization
+CONTENT_PROTON_EXECUTOR_DOCSUM_QUEUESIZE     // Docsum queue depth
+CONTENT_PROTON_EXECUTOR_DOCSUM_UTILIZATION   // Docsum utilization
+
+// Threading service per document DB
+CONTENT_PROTON_DOCUMENTDB_THREADING_SERVICE_MASTER_QUEUESIZE
+CONTENT_PROTON_DOCUMENTDB_THREADING_SERVICE_INDEX_QUEUESIZE
+CONTENT_PROTON_DOCUMENTDB_THREADING_SERVICE_SUMMARY_QUEUESIZE
+```
+
+<Note>
+**Optimal thread count** = Number of CPU cores. Start here and adjust based on utilization metrics.
+</Note>
+
+## Ranking Performance
+
+### Rank Profile Optimization
+
+<Steps>
+  <Step title="Use Phased Ranking">
+    Optimize expensive ranking with two phases:
+    ```text
+    rank-profile optimized {
+      first-phase {
+        expression: bm25(title) + bm25(body)
+      }
+      
+      second-phase {
+        expression: xgboost("model.json")
+        rerank-count: 100  # Only rerank top 100
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Monitor Ranking Metrics">
+    ```java
+    // From SearchNodeMetrics.java
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_DOCS_MATCHED   // First phase
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_DOCS_RANKED    // First phase ranked
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_DOCS_RERANKED  // Second phase
+    
+    // Per rank profile
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_RANK_PROFILE_QUERY_LATENCY
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_RANK_PROFILE_RERANK_TIME
+    ```
+  </Step>
+  
+  <Step title="Optimize Match Phase">
+    Limit first-phase matching for low-relevance documents:
+    ```text
+    rank-profile with-match-phase inherits default {
+      match-phase {
+        attribute: quality_score
+        max-hits: 10000
+        max-filter-coverage: 0.5
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+### Attribute vs Index Trade-offs
+
+<Accordion title="Fast-search Attributes">
+Make attributes searchable for better performance:
+
+```schema
+schema product {
+  document product {
+    field category type string {
+      indexing: summary | attribute
+      attribute: fast-search  # Enable fast searching
+    }
+    
+    field price type int {
+      indexing: summary | attribute
+      attribute: fast-search
+    }
+  }
+}
+```
+
+**When to use fast-search:**
+- Low cardinality fields (< 10,000 unique values)
+- Frequently used in filters or grouping
+- Need fast counting/aggregation
+
+**Memory impact:**
+```java
+// Monitor attribute memory
+CONTENT_PROTON_DOCUMENTDB_ATTRIBUTE_MEMORY_USAGE_ALLOCATED_BYTES
+CONTENT_PROTON_DOCUMENTDB_ATTRIBUTE_MEMORY_USAGE_USED_BYTES
+CONTENT_PROTON_DOCUMENTDB_ATTRIBUTE_RESOURCE_USAGE_ADDRESS_SPACE
+```
+</Accordion>
+
+## Feed Performance Tuning
+
+### Document Processing
+
+Optimize feeding throughput:
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Flush tuning -->
+      <index>
+        <io>
+          <write>directio</write>
+        </io>
+      </index>
+      
+      <!-- Memory index flush threshold -->
+      <index>
+        <maxflushed>2</maxflushed>
+      </index>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+### Feed Metrics
+
+<CodeGroup>
+```java Container Feed Metrics
+// From ContainerMetrics.java
+FEED_OPERATIONS           // Total feed operations
+FEED_LATENCY              // Feed latency
+FEED_HTTP_REQUESTS        // Feed HTTP requests
+
+HTTPAPI_NUM_PUTS          // Put operations
+HTTPAPI_NUM_UPDATES       // Update operations
+HTTPAPI_NUM_REMOVES       // Remove operations
+HTTPAPI_LATENCY           // Operation latency
+```
+
+```java Content Node Feed Metrics
+// From SearchNodeMetrics.java
+CONTENT_PROTON_DOCUMENTDB_FEEDING_COMMIT_OPERATIONS
+CONTENT_PROTON_DOCUMENTDB_FEEDING_COMMIT_LATENCY
+
+// Jobs
+CONTENT_PROTON_DOCUMENTDB_JOB_ATTRIBUTE_FLUSH
+CONTENT_PROTON_DOCUMENTDB_JOB_MEMORY_INDEX_FLUSH
+CONTENT_PROTON_DOCUMENTDB_JOB_DOCUMENT_STORE_FLUSH
+```
+</CodeGroup>
+
+### Batch Feeding
+
+Optimize for high-throughput ingestion:
+
+```python
+import requests
+import json
+
+def batch_feed(documents, batch_size=1000):
+    """Feed documents in batches for optimal throughput"""
+    url = "http://localhost:8080/document/v1/namespace/doctype/docid"
+    
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i+batch_size]
+        
+        # Use async operations
+        for doc in batch:
+            requests.post(
+                url,
+                json=doc,
+                params={'timeout': '180s'},  # Increase timeout
+                headers={'Content-Type': 'application/json'}
+            )
+```
+
+<Warning>
+**Feed rate limits**: Monitor `HTTPAPI_FAILED_TIMEOUT` and `CONTENT_PROTON_RESOURCE_USAGE_FEEDING_BLOCKED` to detect throttling.
+</Warning>
+
+## Memory Optimization
+
+### Content Node Memory
+
+<Steps>
+  <Step title="Configure Memory Limits">
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <resource-limits>
+            <memory>0.85</memory>  <!-- 85% threshold -->
+          </resource-limits>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+  </Step>
+  
+  <Step title="Optimize Document Store Cache">
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <summary>
+            <store>
+              <cache>
+                <maxsize>1073741824</maxsize>  <!-- 1GB cache -->
+                <maxsize-percent>5</maxsize-percent>
+              </cache>
+            </store>
+          </summary>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+    
+    Monitor cache effectiveness:
+    ```java
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_CACHE_HIT_RATE
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_CACHE_MEMORY_USAGE
+    CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_CACHE_ELEMENTS
+    ```
+  </Step>
+  
+  <Step title="Monitor Memory Pressure">
+    ```bash
+    # Check memory metrics
+    curl http://localhost:19050/state/v1/metrics | \
+      jq '.metrics.values[] | select(.name | contains("memory"))'
+    ```
+  </Step>
+</Steps>
+
+### JVM Tuning (Container Nodes)
+
+```xml
+<container version="1.0" id="default">
+  <nodes>
+    <jvm options="
+      -Xms8g -Xmx8g
+      -XX:+UseG1GC
+      -XX:MaxGCPauseMillis=200
+      -XX:InitiatingHeapOccupancyPercent=70
+      -XX:+ParallelRefProcEnabled
+      -XX:MaxTenuringThreshold=8
+    "/>
+  </nodes>
+</container>
+```
+
+**GC Metrics to Monitor:**
+```java
+JDISC_GC_COUNT      // GC frequency
+JDISC_GC_MS         // GC pause time
+MEM_HEAP_USED       // Heap utilization
+```
+
+<Accordion title="GC Tuning Guidelines">
+- **Heap size**: Set to 50-75% of container node RAM
+- **GC algorithm**: Use G1GC for heaps > 4GB
+- **Pause target**: 200ms is reasonable for most applications
+- **Monitor**: GC should be < 5% of total CPU time
+</Accordion>
+
+## Disk Performance
+
+### Storage Configuration
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Document store tuning -->
+      <summary>
+        <store>
+          <!-- Compression -->
+          <compression>
+            <type>lz4</type>
+            <level>6</level>  <!-- 1-9, higher = more compression -->
+          </compression>
+          
+          <!-- File size -->
+          <logstore>
+            <maxfilesize>4000000000</maxfilesize>  <!-- 4GB files -->
+          </logstore>
+        </store>
+      </summary>
+      
+      <!-- Index tuning -->
+      <index>
+        <io>
+          <write>directio</write>  <!-- Bypass OS cache -->
+          <read>directio</read>
+        </io>
+      </index>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+### Disk Metrics
+
+```java
+// Monitor disk usage (from SearchNodeMetrics.java)
+CONTENT_PROTON_DOCUMENTDB_DISK_USAGE                      // Total disk usage
+CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_DISK_USAGE
+CONTENT_PROTON_DOCUMENTDB_READY_DOCUMENT_STORE_DISK_BLOAT
+CONTENT_PROTON_DOCUMENTDB_INDEX_DISK_USAGE
+
+// Transaction log
+CONTENT_PROTON_TRANSACTIONLOG_DISK_USAGE
+CONTENT_PROTON_TRANSACTIONLOG_ENTRIES
+```
+
+### Index Cache Tuning
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Posting list cache -->
+      <diskindexcache>
+        <size>2147483648</size>  <!-- 2GB -->
+      </diskindexcache>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+Monitor cache performance:
+```java
+CONTENT_PROTON_INDEX_CACHE_POSTINGLIST_HIT_RATE
+CONTENT_PROTON_INDEX_CACHE_POSTINGLIST_MEMORY_USAGE
+CONTENT_PROTON_INDEX_CACHE_BITVECTOR_HIT_RATE
+```
+
+## Network Optimization
+
+### Connection Tuning
+
+```xml
+<container version="1.0" id="default">
+  <http>
+    <server id="default" port="8080">
+      <config name="jdisc.http.connector">
+        <maxConnectionLife>300.0</maxConnectionLife>
+        <idleTimeout>60.0</idleTimeout>
+      </config>
+    </server>
+  </http>
+</container>
+```
+
+### Connection Metrics
+
+```java
+// From ContainerMetrics.java
+SERVER_NUM_OPEN_CONNECTIONS      // Current open connections
+SERVER_NUM_CONNECTIONS           // Total connections
+SERVER_CONNECTIONS_OPEN_MAX      // Max concurrent connections
+SERVER_CONNECTION_DURATION_MEAN  // Average connection duration
+```
+
+## Query Timeout Configuration
+
+```xml
+<container version="1.0" id="default">
+  <search>
+    <chain id="default" inherits="vespa">
+      <searcher id="com.yahoo.search.searchers.TimeoutSearcher">
+        <config name="search.searchers.timeout">
+          <timeout>5.0</timeout>  <!-- 5 second query timeout -->
+        </config>
+      </searcher>
+    </chain>
+  </search>
+</container>
+```
+
+Monitor timeout-related metrics:
+```java
+ERROR_TIMEOUT                                        // Timeout errors
+CONTENT_PROTON_DOCUMENTDB_MATCHING_SOFT_DOOMED_QUERIES  // Soft timeouts
+QUERY_TIMEOUT                                        // Configured timeout
+```
+
+## Resource Prioritization
+
+### Feeding vs Queries
+
+Balance resource allocation:
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Lower feeding priority during peak query times -->
+      <feeding>
+        <concurrency>0.5</concurrency>  <!-- 50% of capacity -->
+      </feeding>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+## Benchmarking and Testing
+
+### Load Testing
+
+<Steps>
+  <Step title="Establish Baseline">
+    Measure performance before tuning:
+    ```bash
+    # Use vespa-fbench or custom load generator
+    vespa-fbench -n 100 -q queries.txt -s 30 -c 10 localhost 8080
+    ```
+  </Step>
+  
+  <Step title="Apply Tuning">
+    Make one configuration change at a time
+  </Step>
+  
+  <Step title="Measure Impact">
+    Compare metrics:
+    - Query latency (p50, p95, p99)
+    - Throughput (QPS)
+    - Resource utilization
+    - Error rates
+  </Step>
+  
+  <Step title="Iterate">
+    Continue tuning based on results
+  </Step>
+</Steps>
+
+## Performance Checklist
+
+<AccordionGroup>
+  <Accordion title="Query Performance">
+    - [ ] Optimize rank profiles (use phased ranking)
+    - [ ] Configure appropriate thread pools
+    - [ ] Enable fast-search on filter attributes
+    - [ ] Tune match phase for large result sets
+    - [ ] Monitor query latency percentiles
+  </Accordion>
+  
+  <Accordion title="Feed Performance">
+    - [ ] Use batch feeding for bulk operations
+    - [ ] Increase feed timeout for large documents
+    - [ ] Monitor feeding blocked metric
+    - [ ] Optimize flush intervals
+    - [ ] Balance feeding vs query resource allocation
+  </Accordion>
+  
+  <Accordion title="Memory">
+    - [ ] Configure memory limits appropriately
+    - [ ] Tune document store cache size
+    - [ ] Optimize JVM heap size
+    - [ ] Monitor GC overhead
+    - [ ] Use memory efficiently in rank profiles
+  </Accordion>
+  
+  <Accordion title="Disk">
+    - [ ] Enable compression for document store
+    - [ ] Tune index cache size
+    - [ ] Use direct I/O where appropriate
+    - [ ] Monitor disk bloat metrics
+    - [ ] Plan for disk growth
+  </Accordion>
+</AccordionGroup>
+
+## Performance Anti-Patterns
+
+<Warning>
+**Avoid these common mistakes:**
+
+1. **Over-provisioning threads**: More threads != better performance
+2. **Ignoring cache metrics**: Poor cache hit rates waste resources
+3. **Synchronous feeding**: Always use async operations for high throughput
+4. **No query timeouts**: Can cause resource exhaustion
+5. **Tuning without measuring**: Always benchmark before and after changes
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Track performance metrics
+  </Card>
+  <Card title="Scaling" icon="arrows-maximize" href="/operations/scaling">
+    Scale resources when tuning isn't enough
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Debug performance issues
+  </Card>
+</CardGroup>

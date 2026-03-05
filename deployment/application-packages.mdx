@@ -1,0 +1,316 @@
+---
+title: Application Packages
+description: Understanding the structure and components of Vespa application packages
+---
+
+## Overview
+
+A Vespa application package is a directory structure containing all configuration files needed to run your Vespa application. The application package defines schemas, services, deployment specifications, and custom components.
+
+## Directory Structure
+
+A typical Vespa application package has the following structure:
+
+```bash
+my-app/
+├── services.xml           # Service configuration
+├── deployment.xml         # Deployment specification (optional)
+├── hosts.xml             # Host configuration (optional)
+├── validation-overrides.xml  # Validation overrides (optional)
+├── schemas/              # Document schemas
+│   ├── music.sd
+│   └── artist.sd
+├── search/               # Search configuration
+│   └── query-profiles/   # Query profiles
+│       └── default.xml
+├── models/               # ML models (optional)
+│   └── my_model.onnx
+└── components/           # Custom Java components (optional)
+    └── my-searcher.jar
+```
+
+<Note>
+All files in the application package must be valid XML or conform to their respective formats. Vespa validates the package during deployment.
+</Note>
+
+## Required Files
+
+### services.xml
+
+The `services.xml` file is **required** and defines the services that make up your application:
+
+```xml services.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0">
+  <container id="default" version="1.0">
+    <search/>
+    <document-api/>
+    <nodes>
+      <node hostalias="node1" />
+    </nodes>
+  </container>
+
+  <content id="music" version="1.0">
+    <redundancy>2</redundancy>
+    <documents>
+      <document type="music" mode="index" />
+    </documents>
+    <nodes>
+      <node hostalias="node1" distribution-key="0" />
+    </nodes>
+  </content>
+</services>
+```
+
+See [services.xml configuration](/deployment/services-xml) for detailed documentation.
+
+### schemas/
+
+The `schemas/` directory contains document schema definitions (`.sd` files):
+
+```schema music.sd
+schema music {
+    document music {
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+        }
+        
+        field artist type string {
+            indexing: index | summary
+        }
+        
+        field year type int {
+            indexing: attribute | summary
+        }
+    }
+    
+    fieldset default {
+        fields: title, artist
+    }
+    
+    rank-profile default {
+        first-phase {
+            expression: bm25(title) + bm25(artist)
+        }
+    }
+}
+```
+
+<Note>
+Schema files must have the `.sd` extension and the schema name must match the filename.
+</Note>
+
+## Optional Files
+
+### deployment.xml
+
+Defines deployment specifications for Vespa Cloud or multi-environment deployments:
+
+```xml deployment.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<deployment version="1.0">
+  <test />
+  <staging />
+  <prod>
+    <region active="true">us-east</region>
+    <region active="false">us-west-1</region>
+  </prod>
+</deployment>
+```
+
+See [Vespa Cloud deployment](/deployment/vespa-cloud) for more details.
+
+### hosts.xml
+
+Defines host aliases for services in multi-node deployments:
+
+```xml hosts.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<hosts xmlns:deploy="vespa" xmlns:preprocess="properties">
+  <preprocess:properties>
+    <node1.hostname>foo.example.com</node1.hostname>
+    <node1.hostname deploy:environment="dev">bar.example.com</node1.hostname>
+  </preprocess:properties>
+  
+  <host name="${node1.hostname}">
+    <alias>node1</alias>
+  </host>
+</hosts>
+```
+
+### validation-overrides.xml
+
+Allows temporarily overriding validation rules during deployment:
+
+```xml validation-overrides.xml
+<validation-overrides>
+  <allow until="2026-12-31" comment="Planned migration">field-type-change</allow>
+  <allow until="2026-06-30">cluster-size-reduction</allow>
+</validation-overrides>
+```
+
+<Warning>
+Validation overrides should be used sparingly and only as temporary measures. They expire automatically after the specified date.
+</Warning>
+
+## Advanced Components
+
+### Query Profiles
+
+Define reusable query configurations in `search/query-profiles/`:
+
+```xml search/query-profiles/default.xml
+<query-profile id="default">
+  <field name="hits">10</field>
+  <field name="timeout">5.0</field>
+  <field name="ranking.profile">default</field>
+</query-profile>
+```
+
+### Machine Learning Models
+
+Place ONNX models in the `models/` directory:
+
+```bash
+models/
+├── ranking_model.onnx
+└── embedding_model.onnx
+```
+
+Reference models in your schemas:
+
+```schema
+schema product {
+    document product {
+        field title type string {
+            indexing: summary | index
+        }
+    }
+    
+    rank-profile ml_ranking {
+        inputs {
+            query(user_vector) tensor<float>(x[128])
+        }
+        
+        onnx-model my_model {
+            file: models/ranking_model.onnx
+            input input_ids: my_input
+            output output: my_output
+        }
+        
+        first-phase {
+            expression: onnx(my_model).my_output
+        }
+    }
+}
+```
+
+### Custom Components
+
+Add custom Java components as JAR files in the `components/` directory:
+
+```xml services.xml
+<container id="default" version="1.0">
+  <search>
+    <chain id="default" inherits="vespa">
+      <searcher id="com.example.MySearcher" bundle="my-searcher"/>
+    </chain>
+  </search>
+  
+  <component id="my-component" class="com.example.MyComponent" bundle="my-bundle"/>
+</container>
+```
+
+## Packaging for Deployment
+
+### Creating a Package
+
+For deployment, create a ZIP archive of your application package:
+
+```bash
+zip -r my-app.zip my-app/ -x "*.git*" "*.DS_Store"
+```
+
+### Using vespa-cli
+
+The Vespa CLI automatically packages and deploys your application:
+
+```bash
+# Deploy to local Vespa instance
+vespa deploy my-app
+
+# Deploy to Vespa Cloud
+vespa deploy --target cloud --wait 300
+```
+
+### Using Maven Plugin
+
+For Vespa Cloud deployments, use the Maven plugin:
+
+```xml pom.xml
+<plugin>
+  <groupId>com.yahoo.vespa</groupId>
+  <artifactId>vespa-maven-plugin</artifactId>
+  <version>${vespa.version}</version>
+  <configuration>
+    <tenant>my-tenant</tenant>
+    <application>my-app</application>
+    <instance>default</instance>
+  </configuration>
+</plugin>
+```
+
+```bash
+mvn vespa:deploy
+```
+
+## Environment-Specific Configuration
+
+Use the `deploy:environment` attribute to specify environment-specific settings:
+
+```xml services.xml
+<services version="1.0" xmlns:deploy="vespa">
+  <container id="default" version="1.0">
+    <nodes count="1" deploy:environment="dev">
+      <resources vcpu="2" memory="4Gb" disk="20Gb" />
+    </nodes>
+    
+    <nodes count="3" deploy:environment="prod">
+      <resources vcpu="8" memory="32Gb" disk="500Gb" />
+    </nodes>
+    
+    <search/>
+  </container>
+</services>
+```
+
+## Validation and Best Practices
+
+<Steps>
+  <Step title="Validate Locally">
+    Test your application package locally before deploying:
+    ```bash
+    vespa validate my-app
+    ```
+  </Step>
+  
+  <Step title="Use Version Control">
+    Keep your application package in version control (Git) to track changes and enable rollbacks.
+  </Step>
+  
+  <Step title="Separate Environments">
+    Use `deploy:environment` attributes to maintain separate configurations for dev, staging, and production.
+  </Step>
+  
+  <Step title="Document Changes">
+    Add comments to XML files explaining configuration choices, especially for complex setups.
+  </Step>
+</Steps>
+
+## Related Resources
+
+- [services.xml Configuration](/deployment/services-xml)
+- [Multi-node Systems](/deployment/multinode-systems)
+- [Docker Deployment](/deployment/docker)
+- [Vespa Cloud](/deployment/vespa-cloud)

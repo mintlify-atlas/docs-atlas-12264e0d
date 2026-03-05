@@ -1,0 +1,385 @@
+---
+title: Text Search
+description: Full-text search with BM25 ranking and linguistic processing in Vespa
+---
+
+Vespa provides powerful full-text search capabilities with BM25 ranking, linguistic processing, and advanced text matching operators. The search engine handles tokenization, stemming, and relevance ranking out of the box.
+
+## Basic Text Indexing
+
+Define text fields in your schema:
+
+```schema
+schema article {
+  document article {
+    field title type string {
+      indexing: summary | index
+      index: enable-bm25
+    }
+    
+    field body type string {
+      indexing: summary | index
+      index: enable-bm25
+    }
+  }
+}
+```
+
+<Note>
+The `index: enable-bm25` directive enables BM25 ranking features for the field.
+</Note>
+
+## Text Matching Operators
+
+### Contains (Term Matching)
+
+Matches individual terms with linguistic processing:
+
+```sql
+select * from sources article where title contains "search"
+```
+
+Vespa automatically:
+- Tokenizes the query
+- Applies stemming ("searching" → "search")
+- Handles case normalization
+
+### Matches (Phrase Matching)
+
+Exact phrase matching:
+
+```sql
+select * from sources article where title matches "search engine"
+```
+
+### Prefix Matching
+
+```sql
+select * from sources article where title contains ({prefix: true}"sear")
+```
+
+### Substring Matching
+
+```sql
+select * from sources article where title contains ({substring: true}"arch")
+```
+
+### Suffix Matching
+
+```sql
+select * from sources article where title contains ({suffix: true}"arch")
+```
+
+## BM25 Ranking
+
+Vespa implements the BM25 ranking algorithm, the industry-standard text relevance function. The implementation is in `searchlib/src/vespa/searchlib/features/bm25_feature.cpp`.
+
+### BM25 Formula
+
+From the source code (`searchlib/src/vespa/searchlib/features/bm25_feature.cpp:59-78`):
+
+```cpp
+void Bm25Executor::execute(uint32_t doc_id)
+{
+    feature_t score = 0;
+    for (const auto& term : _terms) {
+        if (term.tfmd->has_ranking_data(doc_id)) {
+            auto raw_num_occs = term.tfmd->getNumOccs();
+            if (raw_num_occs == 0) {
+                // Assume 1 occurrence and average field length
+                score += term.degraded_score;
+            } else {
+                feature_t num_occs = raw_num_occs;
+                feature_t norm_field_length = ((feature_t) term.tfmd->getFieldLength()) / _avg_field_length;
+                feature_t numerator = num_occs * term.idf_mul_k1_plus_one;
+                feature_t denominator = num_occs + (_k1_mul_one_minus_b + _k1_mul_b * norm_field_length);
+                score += numerator / denominator;
+            }
+        }
+    }
+    outputs().set_number(0, score);
+}
+```
+
+### Using BM25 in Ranking
+
+```schema
+schema article {
+  document article {
+    field title type string {
+      indexing: summary | index
+      index: enable-bm25
+    }
+    field body type string {
+      indexing: summary | index
+      index: enable-bm25
+    }
+  }
+  
+  rank-profile bm25 {
+    first-phase {
+      expression: bm25(title) + bm25(body)
+    }
+  }
+}
+```
+
+### BM25 Parameters
+
+Customize k1 and b parameters:
+
+```schema
+rank-profile custom-bm25 {
+  rank-properties {
+    bm25(title).k1: 1.5  # Term frequency saturation (default: 1.2)
+    bm25(title).b: 0.8   # Length normalization (default: 0.75)
+  }
+  first-phase {
+    expression: bm25(title)
+  }
+}
+```
+
+<Accordion title="Understanding k1 parameter">
+**k1** controls term frequency saturation:
+- Lower values (0.5-1.0): Less emphasis on term frequency
+- Default (1.2): Balanced
+- Higher values (1.5-2.0): More emphasis on term frequency
+</Accordion>
+
+<Accordion title="Understanding b parameter">
+**b** controls document length normalization:
+- b = 0: No length normalization
+- b = 0.75: Default, balanced normalization
+- b = 1.0: Full length normalization
+</Accordion>
+
+## Linguistic Processing
+
+Vespa applies linguistic processing from `container-search/src/main/java/com/yahoo/search/yql/YqlParser.java:26-31`:
+
+- **Tokenization**: Split text into tokens
+- **Normalization**: Case folding, Unicode normalization
+- **Stemming**: Reduce words to root form
+- **Segmentation**: Language-specific word segmentation (e.g., Chinese, Japanese)
+
+### Controlling Linguistic Processing
+
+Disable stemming for specific terms:
+
+```sql
+select * from sources article 
+where title contains ({stem: false}"Vespa")
+```
+
+### Language Detection
+
+Vespa can detect document language automatically:
+
+```schema
+field body type string {
+  indexing: summary | index
+  language: detect
+}
+```
+
+## Multi-Field Search
+
+Search across multiple fields:
+
+```sql
+select * from sources article 
+where 
+  title contains "vespa" 
+  or body contains "vespa"
+```
+
+### Fieldsets
+
+Define fieldsets for convenience:
+
+```schema
+fieldset default {
+  fields: title, body
+}
+```
+
+Then query:
+
+```sql
+select * from sources article where default contains "vespa"
+```
+
+## Advanced Text Operators
+
+### Fuzzy Search
+
+Tolerate typos and misspellings:
+
+```sql
+select * from sources article 
+where {maxEditDistance: 2}fuzzy(title, "serch")
+```
+
+<Note>
+`maxEditDistance` controls how many character edits are allowed (default: 2).
+</Note>
+
+### Regular Expressions
+
+```sql
+select * from sources article 
+where title matches "search.*engine"
+```
+
+### WAND (Weak AND)
+
+Efficiently find documents matching any of many terms:
+
+```sql
+select * from sources article 
+where {targetHits: 100}wand(title, {"vespa": 1, "search": 2, "engine": 1})
+```
+
+The numbers are term weights. WAND efficiently finds the top-k documents without evaluating all matches.
+
+### WeakAnd
+
+Similar to WAND but for boolean queries:
+
+```sql
+select * from sources article 
+where weakAnd(title contains "vespa", body contains "search") 
+limit 10
+```
+
+From test case (`application/src/test/java/com/yahoo/application/ApplicationTest.java`):
+```java
+equals("select * from sources * where weakAnd(substring contains \"foobar\") limit 2 timeout 20000000", 
+       result.getQuery().yqlRepresentation(true));
+```
+
+## Text Ranking Features
+
+Vespa provides many text-based ranking features:
+
+### Term Frequency Features
+
+```schema
+rank-profile text-features {
+  first-phase {
+    expression: (
+      fieldMatch(title) +
+      fieldTermMatch(body, 0).occurrences +
+      term(0).significance
+    )
+  }
+}
+```
+
+### Available Features
+
+- `bm25(field)`: BM25 score for field
+- `fieldMatch(field)`: Advanced field matching score
+- `fieldLength(field)`: Document field length
+- `fieldTermMatch(field, term_idx)`: Per-term matching info
+- `term(idx).significance`: Term significance (IDF-based)
+- `termDistance(field, term1_idx, term2_idx)`: Distance between terms
+
+## Query Annotations
+
+Fine-tune query term behavior:
+
+<CodeGroup>
+```sql Weight
+select * from sources article 
+where title contains ({weight: 200}"important")
+```
+
+```sql Ranking Control
+select * from sources article 
+where title contains ({ranked: false}"the")
+```
+
+```sql Significance Override
+select * from sources article 
+where title contains ({significance: 0.8}"term")
+```
+</CodeGroup>
+
+## Text Search Performance
+
+### Indexing Performance
+
+<Steps>
+  <Step title="Use appropriate field types">
+    Use `string` for text fields that need full indexing
+  </Step>
+  
+  <Step title="Enable BM25 selectively">
+    Only enable BM25 on fields that need advanced ranking
+  </Step>
+  
+  <Step title="Tune memory settings">
+    Increase memory for large text corpora
+  </Step>
+</Steps>
+
+### Query Performance
+
+<Steps>
+  <Step title="Use weakAnd for large result sets">
+    When queries match many documents, weakAnd provides better latency
+  </Step>
+  
+  <Step title="Limit field searches">
+    Query specific fields instead of all fields
+  </Step>
+  
+  <Step title="Use prefix/substring sparingly">
+    These operators are slower than exact matching
+  </Step>
+  
+  <Step title="Set appropriate query timeout">
+    Prevent slow queries from consuming resources
+  </Step>
+</Steps>
+
+## Stopwords
+
+Configure stopwords to filter common words:
+
+```schema
+field body type string {
+  indexing: summary | index
+  filter: stopwords
+}
+```
+
+## Highlighting
+
+Enable result highlighting:
+
+```sql
+select * from sources article 
+where body contains "vespa" 
+| all(group() each(output(summary(bolded))))
+```
+
+## Best Practices
+
+1. **Enable BM25 for text relevance**: Use `index: enable-bm25` on important text fields
+2. **Use appropriate match modes**: `contains` for terms, `matches` for phrases
+3. **Leverage linguistic processing**: Let Vespa handle stemming and normalization
+4. **Combine with filters**: Use structured filters to narrow results before text matching
+5. **Monitor field lengths**: Very long fields can impact ranking quality
+
+<Warning>
+Purely prefix-based queries (e.g., `"a*"`) can be expensive. Consider minimum prefix lengths or use suggest/autocomplete features.
+</Warning>
+
+## Next Steps
+
+- Learn about [Ranking Expressions](/search/ranking-expressions) to combine text signals
+- Explore [Vector Search](/search/vector-search) for semantic search
+- Read about [Grouping & Aggregation](/search/grouping-aggregation) for result organization

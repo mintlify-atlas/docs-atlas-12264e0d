@@ -1,0 +1,499 @@
+---
+title: services.xml Configuration
+description: Comprehensive guide to configuring Vespa services using services.xml
+---
+
+## Overview
+
+The `services.xml` file is the core configuration file that defines all services in your Vespa application. It specifies container clusters, content clusters, admin services, and their configurations.
+
+## Basic Structure
+
+```xml services.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0">
+  <!-- Admin cluster (optional but recommended) -->
+  <admin version="2.0">
+    <adminserver hostalias="node1"/>
+  </admin>
+  
+  <!-- Container cluster for query and document processing -->
+  <container id="default" version="1.0">
+    <search/>
+    <document-api/>
+  </container>
+  
+  <!-- Content cluster for document storage and indexing -->
+  <content id="music" version="1.0">
+    <redundancy>2</redundancy>
+    <documents>
+      <document type="music" mode="index"/>
+    </documents>
+    <nodes>
+      <node hostalias="node1" distribution-key="0"/>
+    </nodes>
+  </content>
+</services>
+```
+
+## Container Cluster
+
+Container clusters handle queries, document processing, and custom application logic.
+
+### Basic Container Configuration
+
+```xml
+<container id="default" version="1.0">
+  <!-- Enable search API -->
+  <search/>
+  
+  <!-- Enable document API -->
+  <document-api/>
+  
+  <!-- Configure nodes -->
+  <nodes>
+    <node hostalias="node1"/>
+    <node hostalias="node2"/>
+  </nodes>
+</container>
+```
+
+### Search Chains
+
+Define custom search processing chains:
+
+```xml
+<container id="default" version="1.0">
+  <search>
+    <chain id="default" inherits="vespa">
+      <searcher id="com.example.MySearcher" bundle="my-searcher"/>
+    </chain>
+    
+    <provider id="music" type="local" cluster="music">
+      <searcher id="com.example.MusicSearcher" bundle="music-searcher"/>
+    </provider>
+  </search>
+</container>
+```
+
+### Document Processing
+
+Configure document processing chains:
+
+```xml
+<container id="default" version="1.0">
+  <document-processing>
+    <chain id="default">
+      <documentprocessor id="com.example.MyProcessor" bundle="my-processor">
+        <config name="my.processor.config">
+          <variable>value</variable>
+        </config>
+      </documentprocessor>
+    </chain>
+  </document-processing>
+</container>
+```
+
+### HTTP Handlers and Servlets
+
+Add custom HTTP endpoints:
+
+```xml
+<container id="default" version="1.0">
+  <handler id="com.example.MyHandler" bundle="my-handler">
+    <binding>http://*/my-api/*</binding>
+  </handler>
+  
+  <servlet id="com.example.MyServlet" bundle="my-servlet">
+    <path>/custom-endpoint</path>
+  </servlet>
+</container>
+```
+
+### Components
+
+Define reusable components:
+
+```xml
+<container id="default" version="1.0">
+  <component id="my-component" class="com.example.MyComponent" bundle="my-bundle">
+    <config name="my.component.config">
+      <setting>value</setting>
+    </config>
+  </component>
+  
+  <!-- Use simple linguistics for processing -->
+  <component id="com.yahoo.language.simple.SimpleLinguistics"/>
+</container>
+```
+
+## Content Cluster
+
+Content clusters store documents and handle indexing and searching.
+
+### Basic Content Configuration
+
+```xml
+<content id="music" version="1.0">
+  <!-- Number of document replicas -->
+  <redundancy>2</redundancy>
+  
+  <!-- Document types -->
+  <documents>
+    <document type="music" mode="index"/>
+    <document type="artist" mode="index"/>
+  </documents>
+  
+  <!-- Node configuration -->
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+  </nodes>
+</content>
+```
+
+### Document Modes
+
+<Accordion title="Available Document Modes">
+  - **index**: Full-text search with indexes
+  - **streaming**: Streaming search without indexes (reads from storage)
+  - **store-only**: Only storage, no search capabilities
+</Accordion>
+
+```xml
+<content id="products" version="1.0">
+  <documents>
+    <!-- Full-text indexed documents -->
+    <document type="product" mode="index"/>
+    
+    <!-- Streaming search for user data -->
+    <document type="user" mode="streaming"/>
+    
+    <!-- Store-only for large binary data -->
+    <document type="media" mode="store-only"/>
+  </documents>
+</content>
+```
+
+### Redundancy and Distribution
+
+```xml
+<content id="music" version="1.0">
+  <!-- Store 3 copies of each document -->
+  <redundancy>3</redundancy>
+  
+  <!-- Searchable copies (must be <= redundancy) -->
+  <searchable-copies>2</searchable-copies>
+  
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+</content>
+```
+
+<Note>
+Setting `searchable-copies` lower than `redundancy` reduces indexing load while maintaining data availability.
+</Note>
+
+### Hierarchical Distribution Groups
+
+For large-scale deployments, organize nodes into hierarchical groups:
+
+```xml
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  
+  <group name="top">
+    <distribution partitions="2|*"/>
+    
+    <group name="datacenter1" distribution-key="0">
+      <node hostalias="node1" distribution-key="0"/>
+      <node hostalias="node2" distribution-key="1"/>
+      <node hostalias="node3" distribution-key="2"/>
+    </group>
+    
+    <group name="datacenter2" distribution-key="1">
+      <node hostalias="node4" distribution-key="3"/>
+      <node hostalias="node5" distribution-key="4"/>
+      <node hostalias="node6" distribution-key="5"/>
+    </group>
+  </group>
+</content>
+```
+
+See [Multi-node Systems](/deployment/multinode-systems) for detailed information on distribution.
+
+### Cluster Controller Tuning
+
+```xml
+<content id="music" version="1.0">
+  <tuning>
+    <cluster-controller>
+      <transition-time>5</transition-time>
+      <init-progress-time>2</init-progress-time>
+      <max-premature-crashes>3</max-premature-crashes>
+      <stable-state-period>240</stable-state-period>
+      <min-distributor-up-ratio>0.0</min-distributor-up-ratio>
+      <min-storage-up-ratio>0.7</min-storage-up-ratio>
+    </cluster-controller>
+  </tuning>
+</content>
+```
+
+## Admin Cluster
+
+The admin cluster manages monitoring, logging, and cluster coordination.
+
+### Basic Admin Configuration
+
+```xml
+<admin version="2.0">
+  <adminserver hostalias="node1"/>
+  <logserver hostalias="node1"/>
+  
+  <!-- Monitoring interval in seconds -->
+  <monitoring interval="60"/>
+</admin>
+```
+
+### Slobroks (Service Location Brokers)
+
+```xml
+<admin version="2.0">
+  <adminserver hostalias="node1"/>
+  
+  <slobroks>
+    <slobrok hostalias="node1"/>
+    <slobrok hostalias="node2"/>
+  </slobroks>
+</admin>
+```
+
+<Note>
+For production deployments, configure at least 2-3 slobrok instances for high availability.
+</Note>
+
+## Resource Specification
+
+### Vespa Cloud Resource Specification
+
+For Vespa Cloud and self-hosted deployments, specify resource requirements:
+
+```xml
+<container id="default" version="1.0">
+  <nodes count="3">
+    <resources vcpu="8" memory="32Gb" disk="500Gb" disk-speed="fast" storage-type="local"/>
+  </nodes>
+</container>
+
+<content id="music" version="1.0">
+  <redundancy>2</redundancy>
+  <documents>
+    <document type="music" mode="index"/>
+  </documents>
+  
+  <nodes count="6" groups="3">
+    <resources vcpu="16" memory="64Gb" disk="1800Gb" disk-speed="fast" storage-type="local"/>
+  </nodes>
+</content>
+```
+
+### Environment-Specific Resources
+
+```xml
+<services version="1.0" xmlns:deploy="vespa">
+  <container id="default" version="1.0">
+    <!-- Development environment -->
+    <nodes count="1" deploy:environment="dev">
+      <resources vcpu="2" memory="4Gb" disk="20Gb"/>
+    </nodes>
+    
+    <!-- Production environment -->
+    <nodes count="5" deploy:environment="prod">
+      <resources vcpu="16" memory="64Gb" disk="1800Gb" disk-speed="fast"/>
+    </nodes>
+    
+    <search/>
+  </container>
+</services>
+```
+
+## Advanced Configuration
+
+### Cloud-Specific Configuration
+
+Target specific cloud providers:
+
+```xml
+<services version="1.0" xmlns:deploy="vespa">
+  <content id="data" version="1.0">
+    <redundancy>1</redundancy>
+    <documents>
+      <document type="doc" mode="index"/>
+    </documents>
+    
+    <!-- AWS configuration -->
+    <nodes count="3" groups="3" deploy:cloud="aws">
+      <resources vcpu="8" memory="32Gb" disk="500Gb"/>
+    </nodes>
+    
+    <!-- GCP configuration -->
+    <nodes count="3" groups="3" deploy:cloud="gcp">
+      <resources vcpu="8" memory="30Gb" disk="550Gb"/>
+    </nodes>
+  </content>
+</services>
+```
+
+### Region and Tag-Based Deployment
+
+```xml
+<services version="1.0" xmlns:deploy="vespa">
+  <container id="qrs" version="1.0">
+    <!-- Deploy in specific regions -->
+    <nodes count="2" deploy:region="aws-us-east-1">
+      <resources vcpu="8" memory="16Gb" disk="64Gb"/>
+    </nodes>
+    
+    <nodes count="2" deploy:region="aws-eu-west-1">
+      <resources vcpu="8" memory="16Gb" disk="64Gb"/>
+    </nodes>
+    
+    <!-- Deploy with specific tags -->
+    <nodes count="5" deploy:tags="beta" deploy:region="aws-us-west-2">
+      <resources vcpu="16" memory="32Gb" disk="64Gb"/>
+    </nodes>
+    
+    <search/>
+  </container>
+</services>
+```
+
+### Access Logging
+
+Configure access logging for containers:
+
+```xml
+<container id="default" version="1.0">
+  <!-- Enable access logging -->
+  <accesslog type="vespa" />
+  
+  <!-- Disable access logging -->
+  <!-- <accesslog type="disabled" /> -->
+  
+  <search/>
+</container>
+```
+
+## Complete Example
+
+A comprehensive production-ready `services.xml`:
+
+```xml services.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<services version="1.0" xmlns:deploy="vespa" xmlns:preprocess="properties">
+  
+  <admin version="2.0">
+    <adminserver hostalias="admin1"/>
+    <logserver hostalias="admin1"/>
+    <slobroks>
+      <slobrok hostalias="admin1"/>
+      <slobrok hostalias="admin2"/>
+    </slobroks>
+    <monitoring interval="60"/>
+  </admin>
+  
+  <container id="query" version="1.0">
+    <search>
+      <chain id="default" inherits="vespa">
+        <searcher id="com.example.CustomSearcher" bundle="custom-searchers"/>
+      </chain>
+    </search>
+    
+    <component id="com.yahoo.language.simple.SimpleLinguistics"/>
+    
+    <nodes count="3" deploy:environment="prod">
+      <resources vcpu="8" memory="32Gb" disk="100Gb"/>
+    </nodes>
+    
+    <nodes count="1" deploy:environment="dev">
+      <resources vcpu="2" memory="4Gb" disk="20Gb"/>
+    </nodes>
+  </container>
+  
+  <container id="feed" version="1.0">
+    <document-api/>
+    
+    <document-processing>
+      <chain id="default">
+        <documentprocessor id="com.example.EnrichmentProcessor" bundle="enrichment"/>
+      </chain>
+    </document-processing>
+    
+    <nodes count="2">
+      <resources vcpu="4" memory="16Gb" disk="50Gb"/>
+    </nodes>
+  </container>
+  
+  <content id="music" version="1.0">
+    <redundancy>2</redundancy>
+    <searchable-copies>1</searchable-copies>
+    
+    <documents>
+      <document type="music" mode="index"/>
+      <document type="artist" mode="index"/>
+    </documents>
+    
+    <tuning>
+      <cluster-controller>
+        <transition-time>5</transition-time>
+        <min-storage-up-ratio>0.7</min-storage-up-ratio>
+      </cluster-controller>
+    </tuning>
+    
+    <nodes count="6" groups="3">
+      <resources vcpu="16" memory="64Gb" disk="1800Gb" disk-speed="fast" storage-type="local"/>
+    </nodes>
+  </content>
+  
+</services>
+```
+
+## Validation and Best Practices
+
+<Steps>
+  <Step title="Validate XML Syntax">
+    Ensure your `services.xml` is well-formed XML:
+    ```bash
+    xmllint --noout services.xml
+    ```
+  </Step>
+  
+  <Step title="Use Meaningful IDs">
+    Give clusters and components descriptive IDs that reflect their purpose (e.g., `query`, `feed`, `music-content`).
+  </Step>
+  
+  <Step title="Plan Resource Allocation">
+    Allocate resources based on workload:
+    - Query clusters: More CPU for low-latency processing
+    - Content clusters: More memory and disk for large datasets
+  </Step>
+  
+  <Step title="Test Configuration Changes">
+    Test configuration changes in a development environment before deploying to production.
+  </Step>
+</Steps>
+
+<Warning>
+Changing cluster IDs or removing clusters requires careful planning as it affects data distribution and may require data migration.
+</Warning>
+
+## Related Resources
+
+- [Application Packages](/deployment/application-packages)
+- [Multi-node Systems](/deployment/multinode-systems)
+- [Docker Deployment](/deployment/docker)
+- [Vespa Cloud](/deployment/vespa-cloud)

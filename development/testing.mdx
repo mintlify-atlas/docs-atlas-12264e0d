@@ -1,0 +1,514 @@
+---
+title: Testing Vespa
+description: Run and write tests for Vespa components
+---
+
+Vespa has a comprehensive test suite covering unit tests, integration tests, and system tests. This guide explains how to run existing tests and write new ones.
+
+## Test Organization
+
+Vespa's tests are organized by technology and scope:
+
+<CardGroup cols={2}>
+  <Card title="Java Unit Tests" icon="java">
+    JUnit-based tests in `src/test/java/` directories
+  </Card>
+
+  <Card title="C++ Unit Tests" icon="c">
+    Google Test-based tests in `src/tests/` directories
+  </Card>
+
+  <Card title="Shell Script Tests" icon="terminal">
+    BATS framework tests in `.bats` files
+  </Card>
+
+  <Card title="System Tests" icon="server">
+    End-to-end tests in separate repository
+  </Card>
+</CardGroup>
+
+## Running Java Tests
+
+### Run All Tests
+
+```bash
+# Run all Java tests
+mvn test
+
+# Run tests in parallel (faster)
+mvn test --threads 1C
+```
+
+### Run Tests for Specific Module
+
+```bash
+# Navigate to module directory
+cd container-search
+
+# Run tests for this module only
+mvn test
+```
+
+### Run Specific Test Class
+
+```bash
+# Run single test class
+mvn test -Dtest=YourTestClass
+
+# Run multiple test classes
+mvn test -Dtest=Test1,Test2,Test3
+
+# Run tests matching pattern
+mvn test -Dtest=*IntegrationTest
+```
+
+### Run Specific Test Method
+
+```bash
+# Run single test method
+mvn test -Dtest=YourTestClass#testMethod
+
+# Run multiple methods
+mvn test -Dtest=YourTestClass#testMethod1+testMethod2
+```
+
+### Skip Tests During Build
+
+```bash
+# Build without running tests
+mvn install -DskipTests
+
+# Build without compiling or running tests
+mvn install -Dmaven.test.skip=true
+```
+
+## Running C++ Tests
+
+C++ tests are built using CMake and run with CTest.
+
+### Build and Run Tests
+
+<Steps>
+  <Step title="Configure build with tests">
+    ```bash
+    mkdir build
+    cd build
+    cmake ..
+    ```
+
+    To exclude tests from default build:
+    ```bash
+    cmake -DEXCLUDE_TESTS_FROM_ALL=ON ..
+    ```
+  </Step>
+
+  <Step title="Build tests">
+    ```bash
+    # Build all targets including tests
+    make -j$(nproc)
+
+    # Build only tests
+    make -j$(nproc) test
+    ```
+  </Step>
+
+  <Step title="Run tests with CTest">
+    ```bash
+    # Run all tests
+    ctest
+
+    # Run tests in parallel
+    ctest -j$(nproc)
+
+    # Run tests with verbose output
+    ctest -V
+    ```
+  </Step>
+</Steps>
+
+### Run Specific C++ Tests
+
+```bash
+# Run tests matching regex
+ctest -R searchlib
+
+# Run tests NOT matching regex
+ctest -E slow_test
+
+# Run tests by number
+ctest -I 1,10  # Run tests 1-10
+
+# Rerun failed tests
+ctest --rerun-failed
+```
+
+### Valgrind Testing
+
+Run tests under Valgrind to detect memory issues:
+
+```bash
+# Configure with Valgrind enabled
+cmake -DVALGRIND_UNIT_TESTS=ON ..
+make -j$(nproc)
+
+# Run tests under Valgrind
+ctest -V
+```
+
+Individual tests can opt out of Valgrind using the `NO_VALGRIND` parameter in `vespa_add_test`.
+
+### Benchmark Tests
+
+Benchmark tests are only run when explicitly enabled:
+
+```bash
+# Enable benchmark tests
+cmake -DRUN_BENCHMARKS=ON ..
+make -j$(nproc)
+ctest
+```
+
+## Running Shell Script Tests
+
+Vespa uses [BATS](https://bats-core.readthedocs.io/) for testing shell scripts.
+
+### Setup BATS
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    # Install BATS and plugins
+    brew install node
+    sudo npm install -g bats bats-assert bats-support bats-mock
+
+    # Set plugin path
+    export BATS_PLUGIN_PATH="$(npm root -g)"
+    ```
+
+    Add the export to `~/.zshrc` or `~/.bashrc` to persist.
+  </Tab>
+
+  <Tab title="AlmaLinux/Docker">
+    ```bash
+    # Install Node.js
+    dnf install -y nodejs
+
+    # Install BATS globally
+    npm install -g bats bats-assert bats-support bats-mock
+
+    # Set plugin path
+    export BATS_PLUGIN_PATH="$(npm root -g)"
+    ```
+  </Tab>
+</Tabs>
+
+### Run Shell Tests
+
+```bash
+# Run all BATS tests recursively
+bats -r .
+
+# Run specific test file
+bats path/to/test.bats
+
+# Run with verbose output
+bats -v test.bats
+
+# Run specific test by line number
+bats test.bats:42
+```
+
+### IntelliJ Integration
+
+Shell tests can be run directly in IntelliJ IDEA:
+
+1. Install the [BashSupport Pro](https://plugins.jetbrains.com/plugin/13841-bashsupport-pro) plugin
+2. Ensure `BATS_PLUGIN_PATH` is exported before launching IntelliJ
+3. Right-click on `.bats` files and select "Run"
+
+## Writing Tests
+
+### Writing Java Tests
+
+Java tests use JUnit and are placed in `src/test/java/` matching the package structure:
+
+```java
+package com.yahoo.example;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class MyComponentTest {
+
+    @Test
+    void testBasicFunctionality() {
+        MyComponent component = new MyComponent();
+        assertEquals("expected", component.doSomething());
+    }
+
+    @Test
+    void testErrorHandling() {
+        MyComponent component = new MyComponent();
+        assertThrows(IllegalArgumentException.class, 
+            () -> component.invalidOperation());
+    }
+}
+```
+
+**Best practices:**
+- Test classes should end with `Test`
+- One test class per production class
+- Use descriptive test method names
+- Test both success and error cases
+- Keep tests fast and independent
+
+### Writing C++ Tests
+
+C++ tests use Google Test framework. Add test definitions to `CMakeLists.txt`:
+
+```cmake
+vespa_add_executable(mymodule_test TEST
+  SOURCES
+    my_component_test.cpp
+  DEPENDS
+    mymodule
+    gtest
+)
+
+vespa_add_test(
+  NAME mymodule_test
+  COMMAND mymodule_test
+)
+```
+
+Test implementation:
+
+```cpp
+#include <vespa/mymodule/my_component.h>
+#include <gtest/gtest.h>
+
+using namespace mymodule;
+
+TEST(MyComponentTest, BasicFunctionality) {
+    MyComponent component;
+    EXPECT_EQ("expected", component.doSomething());
+}
+
+TEST(MyComponentTest, ErrorHandling) {
+    MyComponent component;
+    EXPECT_THROW(component.invalidOperation(), std::runtime_error);
+}
+
+int main(int argc, char **argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
+```
+
+**Test options:**
+
+```cmake
+vespa_add_test(
+  NAME my_slow_test
+  COMMAND my_test --iterations=1000
+  RUN_SERIAL        # Don't run in parallel with other tests
+  NO_VALGRIND       # Skip Valgrind for this test
+)
+
+vespa_add_test(
+  NAME my_benchmark
+  COMMAND benchmark_tool
+  BENCHMARK         # Only run when RUN_BENCHMARKS=ON
+)
+```
+
+### Writing Shell Script Tests
+
+Create `.bats` files with test cases:
+
+```bash
+#!/usr/bin/env bats
+
+# Load test helpers
+load "${BATS_PLUGIN_PATH}/bats-support/load.bash"
+load "${BATS_PLUGIN_PATH}/bats-assert/load.bash"
+
+setup() {
+    # Run before each test
+    export TEST_DIR="$(mktemp -d)"
+}
+
+teardown() {
+    # Run after each test
+    rm -rf "$TEST_DIR"
+}
+
+@test "script runs successfully" {
+    run ./my-script.sh --option value
+    assert_success
+    assert_output --partial "expected output"
+}
+
+@test "script handles errors" {
+    run ./my-script.sh --invalid
+    assert_failure
+    assert_output --partial "error message"
+}
+```
+
+**BATS assertions:**
+- `assert_success` - Exit code is 0
+- `assert_failure` - Exit code is non-zero
+- `assert_output "text"` - Exact output match
+- `assert_output --partial "text"` - Partial match
+- `assert_line "text"` - Line matches exactly
+- `assert_equal "$expected" "$actual"` - Values are equal
+
+## System Tests
+
+System tests are in a separate repository: [vespa-engine/system-test](https://github.com/vespa-engine/system-test)
+
+These tests:
+- Verify end-to-end functionality
+- Test multi-node configurations
+- Validate production-like scenarios
+- Run in continuous integration
+
+See the system-test repository for contribution guidelines.
+
+## Test Configuration
+
+### Maven Surefire (Java)
+
+Configure test execution in `pom.xml`:
+
+```xml
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId>
+      <artifactId>maven-surefire-plugin</artifactId>
+      <configuration>
+        <forkCount>1</forkCount>
+        <reuseForks>false</reuseForks>
+        <argLine>-Xms128m -Xmx512m</argLine>
+      </configuration>
+    </plugin>
+  </plugins>
+</build>
+```
+
+### CTest (C++)
+
+Set test properties:
+
+```cmake
+vespa_add_test(
+  NAME integration_test
+  COMMAND integration_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  ENVIRONMENT "CONFIG_PATH=${CMAKE_SOURCE_DIR}/config"
+)
+```
+
+## Continuous Integration
+
+Vespa uses [Buildkite](https://buildkite.com/vespaai/vespa-engine-vespa) for CI:
+
+- All tests run on every commit
+- Tests must pass before merging
+- Performance benchmarks track regressions
+- Coverage reports available
+
+View build status at [factory.vespa.ai](https://factory.vespa.ai)
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Tests fail with OutOfMemoryError">
+    Increase memory for Maven tests:
+
+    ```xml
+    <argLine>-Xms256m -Xmx1024m</argLine>
+    ```
+
+    Or set `MAVEN_OPTS`:
+    ```bash
+    export MAVEN_OPTS="-Xmx1024m"
+    mvn test
+    ```
+  </Accordion>
+
+  <Accordion title="CTest shows no tests found">
+    Ensure tests were built:
+
+    ```bash
+    # Without EXCLUDE_TESTS_FROM_ALL
+    cmake ..
+    make -j$(nproc)
+
+    # Or build test target explicitly
+    make -j$(nproc) test
+    ```
+  </Accordion>
+
+  <Accordion title="BATS tests fail to load plugins">
+    Verify `BATS_PLUGIN_PATH` is set:
+
+    ```bash
+    echo $BATS_PLUGIN_PATH
+    # Should output: /path/to/npm/root
+
+    # If empty, set it:
+    export BATS_PLUGIN_PATH="$(npm root -g)"
+    ```
+  </Accordion>
+
+  <Accordion title="Tests pass locally but fail in CI">
+    Common causes:
+    - Environment differences (paths, dependencies)
+    - Timing issues (tests may be slower in CI)
+    - Resource constraints (less memory/CPU)
+    - Test interdependencies
+
+    Run tests with same conditions as CI:
+    ```bash
+    # Clean build
+    mvn clean install
+
+    # Single-threaded
+    mvn test -DforkCount=1
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Testing
+
+For performance-critical changes:
+
+1. Write benchmark tests using `BENCHMARK` flag
+2. Compare results before and after changes
+3. Document performance implications in PR
+4. Monitor CI performance metrics
+
+See individual module READMEs for module-specific benchmarking tools.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Code Map" icon="map" href="/development/code-map">
+    Navigate the codebase to find what to test
+  </Card>
+
+  <Card title="Building Vespa" icon="hammer" href="/development/building">
+    Build Vespa before running tests
+  </Card>
+
+  <Card title="Development Overview" icon="code" href="/development/overview">
+    Return to development overview
+  </Card>
+
+  <Card title="System Tests" icon="server" href="https://github.com/vespa-engine/system-test">
+    Contribute to system tests
+  </Card>
+</CardGroup>

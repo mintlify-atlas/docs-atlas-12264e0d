@@ -1,0 +1,712 @@
+---
+title: RAG Applications
+---
+
+Vespa provides a complete platform for building Retrieval-Augmented Generation (RAG) applications, combining powerful search and retrieval capabilities with machine learning models and LLM integration.
+
+## What is RAG?
+
+Retrieval-Augmented Generation enhances large language model (LLM) responses by:
+
+1. **Retrieving** relevant context from a knowledge base
+2. **Augmenting** the LLM prompt with retrieved information
+3. **Generating** responses grounded in factual data
+
+```
+┌─────────────┐
+│ User Query  │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────┐
+│  Vespa Retrieval    │  ← Embeddings, BM25, Hybrid Search
+│  • Semantic Search  │
+│  • Keyword Search   │
+│  • Reranking        │
+└──────┬──────────────┘
+       │
+       │ Retrieved Context
+       ▼
+┌─────────────────────┐
+│   LLM Generation    │  ← GPT-4, Claude, Llama, etc.
+│  Prompt + Context   │
+└──────┬──────────────┘
+       │
+       ▼
+┌─────────────────────┐
+│  Final Response     │
+└─────────────────────┘
+```
+
+## Why Vespa for RAG?
+
+Vespa excels at RAG applications because it provides:
+
+<CardGroup cols={2}>
+  <Card title="Hybrid Search" icon="magnifying-glass">
+    Combine semantic and lexical search for better retrieval
+  </Card>
+  <Card title="Built-in Embeddings" icon="vector-square">
+    Native embedder components for text vectorization
+  </Card>
+  <Card title="Advanced Reranking" icon="ranking-star">
+    Multi-stage ranking with cross-encoders
+  </Card>
+  <Card title="Real-time Updates" icon="bolt">
+    Keep knowledge base fresh with instant updates
+  </Card>
+  <Card title="Structured + Unstructured" icon="database">
+    Handle both structured data and text
+  </Card>
+  <Card title="Scalable" icon="chart-line">
+    Scale from prototype to production
+  </Card>
+</CardGroup>
+
+## Building a RAG Application
+
+<Steps>
+  <Step title="Define Your Schema">
+    Create a schema for your knowledge base documents:
+    
+    ```
+    schema knowledge {
+        document knowledge {
+            field doc_id type string {
+                indexing: summary | attribute
+                rank: filter
+            }
+            
+            field title type string {
+                indexing: index | summary
+                index: enable-bm25
+            }
+            
+            field content type string {
+                indexing: index | summary
+                index: enable-bm25
+            }
+            
+            field metadata type string {
+                indexing: summary
+            }
+        }
+        
+        # Semantic embedding field
+        field embedding type tensor<float>(x[384]) {
+            indexing: input content | embed embedder | attribute
+            attribute {
+                distance-metric: angular
+            }
+        }
+        
+        # Hybrid search rank profile
+        rank-profile hybrid {
+            inputs {
+                query(q_embedding) tensor<float>(x[384])
+            }
+            
+            first-phase {
+                expression: 0.7 * closeness(field, embedding) + 0.3 * (bm25(title) + bm25(content))
+            }
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Configure Embedder">
+    Set up an embedder for semantic search:
+    
+    ```xml
+    <container id="default" version="1.0">
+      <component id="embedder" class="ai.vespa.embedding.HuggingFaceEmbedder" bundle="model-integration">
+        <config name="embedding.hugging-face-embedder">
+          <tokenizerPath>
+            <model>models/tokenizer.json</model>
+          </tokenizerPath>
+          <transformerModel>
+            <model>models/model.onnx</model>
+          </transformerModel>
+          <transformerMaxTokens>512</transformerMaxTokens>
+          <normalize>true</normalize>
+          <poolingStrategy>mean</poolingStrategy>
+        </config>
+      </component>
+      
+      <search />
+      <document-api />
+    </container>
+    ```
+  </Step>
+  
+  <Step title="Index Your Knowledge Base">
+    Feed documents to Vespa:
+    
+    ```python
+    from vespa.application import Vespa
+    
+    app = Vespa(url="http://localhost:8080")
+    
+    documents = [
+        {
+            "fields": {
+                "doc_id": "doc1",
+                "title": "Machine Learning Basics",
+                "content": "Machine learning is a subset of artificial intelligence...",
+                "metadata": '{"source": "textbook", "date": "2024-01-01"}'
+            }
+        },
+        # ... more documents
+    ]
+    
+    for doc in documents:
+        app.feed_data_point(
+            schema="knowledge",
+            data_id=doc["fields"]["doc_id"],
+            fields=doc["fields"]
+        )
+    ```
+  </Step>
+  
+  <Step title="Implement Retrieval">
+    Search for relevant context:
+    
+    ```python
+    def retrieve_context(query: str, num_results: int = 5):
+        # Embed the query
+        response = app.query(
+            yql="select doc_id, title, content from knowledge where userQuery()",
+            query=query,
+            ranking="hybrid",
+            hits=num_results
+        )
+        
+        # Extract relevant passages
+        contexts = []
+        for hit in response.hits:
+            contexts.append({
+                "title": hit["fields"]["title"],
+                "content": hit["fields"]["content"],
+                "relevance": hit["relevance"]
+            })
+        
+        return contexts
+    ```
+  </Step>
+  
+  <Step title="Augment LLM Prompt">
+    Combine retrieved context with user query:
+    
+    ```python
+    import openai
+    
+    def generate_response(user_query: str):
+        # 1. Retrieve relevant context
+        contexts = retrieve_context(user_query, num_results=5)
+        
+        # 2. Format context for LLM
+        context_text = "\n\n".join([
+            f"Source: {ctx['title']}\n{ctx['content']}"
+            for ctx in contexts
+        ])
+        
+        # 3. Create augmented prompt
+        prompt = f"""Answer the following question using the provided context.
+        
+    Context:
+    {context_text}
+    
+    Question: {user_query}
+    
+    Answer:"""
+        
+        # 4. Generate response
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided context."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        return {
+            "answer": response.choices[0].message.content,
+            "sources": contexts
+        }
+    ```
+  </Step>
+</Steps>
+
+## Advanced RAG Patterns
+
+### Multi-Stage Retrieval
+
+Use multiple retrieval stages for better precision:
+
+```
+rank-profile multi_stage {
+    inputs {
+        query(q_embedding) tensor<float>(x[384])
+    }
+    
+    # Stage 1: Fast semantic + keyword retrieval
+    first-phase {
+        expression: (
+            0.7 * closeness(field, embedding) + 
+            0.3 * (bm25(title) + bm25(content))
+        )
+    }
+    
+    # Stage 2: Cross-encoder reranking
+    second-phase {
+        expression: onnx(cross_encoder).logits{d0:0,d1:0}
+        rerank-count: 100
+    }
+}
+```
+
+```python
+def retrieve_with_reranking(query: str):
+    response = app.query(
+        yql="select * from knowledge where userQuery()",
+        query=query,
+        ranking="multi_stage",
+        hits=10
+    )
+    return response.hits
+```
+
+### Contextual Chunking
+
+Handle long documents by chunking with overlap:
+
+```
+schema chunk {
+    document chunk {
+        field doc_id type string {
+            indexing: summary | attribute
+        }
+        
+        field chunk_id type int {
+            indexing: summary | attribute
+        }
+        
+        field text type string {
+            indexing: index | summary
+        }
+        
+        field parent_context type string {
+            indexing: summary
+        }
+    }
+    
+    field embedding type tensor<float>(x[384]) {
+        indexing: input text | embed | attribute
+    }
+}
+```
+
+```python
+def chunk_document(text: str, chunk_size: int = 500, overlap: int = 100):
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        
+        chunks.append({
+            "text": chunk,
+            "start": start,
+            "end": end
+        })
+        
+        start += chunk_size - overlap
+    
+    return chunks
+```
+
+### Query Expansion
+
+Expand queries for better recall:
+
+```python
+def expand_query(query: str) -> list[str]:
+    # Use LLM to generate query variations
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{
+            "role": "user",
+            "content": f"Generate 3 alternative phrasings of this query: {query}"
+        }]
+    )
+    
+    variations = response.choices[0].message.content.split('\n')
+    return [query] + variations
+
+def retrieve_with_expansion(query: str):
+    queries = expand_query(query)
+    all_results = []
+    
+    for q in queries:
+        results = app.query(
+            yql="select * from knowledge where userQuery()",
+            query=q,
+            ranking="hybrid",
+            hits=5
+        )
+        all_results.extend(results.hits)
+    
+    # Deduplicate and re-rank
+    seen = set()
+    unique_results = []
+    for hit in all_results:
+        doc_id = hit["fields"]["doc_id"]
+        if doc_id not in seen:
+            seen.add(doc_id)
+            unique_results.append(hit)
+    
+    return unique_results[:10]
+```
+
+### Filtering and Metadata
+
+Combine semantic search with structured filters:
+
+```python
+def retrieve_with_filters(
+    query: str,
+    source_type: str = None,
+    date_range: tuple = None
+):
+    # Build filter conditions
+    filters = []
+    if source_type:
+        filters.append(f'metadata contains "{source_type}"')
+    if date_range:
+        start, end = date_range
+        filters.append(f'timestamp >= {start} and timestamp <= {end}')
+    
+    where_clause = " and ".join(filters) if filters else "true"
+    
+    response = app.query(
+        yql=f"select * from knowledge where userQuery() and {where_clause}",
+        query=query,
+        ranking="hybrid",
+        hits=10
+    )
+    
+    return response.hits
+```
+
+## ColBERT for RAG
+
+Use ColBERT's multi-vector representations for fine-grained matching:
+
+```
+schema colbert_doc {
+    document colbert_doc {
+        field text type string {
+            indexing: summary
+        }
+    }
+    
+    field colbert type tensor<float>(token{}, x[128]) {
+        indexing: input text | embed colbert_embedder | attribute
+    }
+    
+    rank-profile colbert_rag {
+        inputs {
+            query(qt) tensor<float>(qt{}, x[128])
+        }
+        
+        first-phase {
+            expression: sum(
+                reduce(
+                    sum(
+                        query(qt) * attribute(colbert), x
+                    ),
+                    max, token
+                ),
+                qt
+            )
+        }
+    }
+}
+```
+
+ColBERT provides better retrieval for RAG by matching at the token level.
+
+## Streaming RAG Responses
+
+Stream LLM responses while showing sources:
+
+```python
+import openai
+from typing import Generator
+
+def stream_rag_response(user_query: str) -> Generator[dict, None, None]:
+    # 1. Retrieve context
+    contexts = retrieve_context(user_query)
+    
+    # 2. Yield sources first
+    yield {
+        "type": "sources",
+        "data": contexts
+    }
+    
+    # 3. Build prompt
+    context_text = "\n\n".join([ctx["content"] for ctx in contexts])
+    prompt = f"Context:\n{context_text}\n\nQuestion: {user_query}\n\nAnswer:"
+    
+    # 4. Stream LLM response
+    stream = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        stream=True
+    )
+    
+    for chunk in stream:
+        if chunk.choices[0].delta.get("content"):
+            yield {
+                "type": "token",
+                "data": chunk.choices[0].delta.content
+            }
+```
+
+## Evaluation and Monitoring
+
+### Retrieval Quality
+
+Monitor retrieval performance:
+
+```python
+def evaluate_retrieval(test_cases: list[dict]):
+    metrics = {
+        "recall@5": [],
+        "recall@10": [],
+        "mrr": []
+    }
+    
+    for case in test_cases:
+        query = case["query"]
+        relevant_docs = set(case["relevant_docs"])
+        
+        # Retrieve results
+        results = retrieve_context(query, num_results=10)
+        retrieved_ids = [r["doc_id"] for r in results]
+        
+        # Calculate metrics
+        recall_5 = len(set(retrieved_ids[:5]) & relevant_docs) / len(relevant_docs)
+        recall_10 = len(set(retrieved_ids[:10]) & relevant_docs) / len(relevant_docs)
+        
+        # Mean Reciprocal Rank
+        mrr = 0
+        for i, doc_id in enumerate(retrieved_ids):
+            if doc_id in relevant_docs:
+                mrr = 1 / (i + 1)
+                break
+        
+        metrics["recall@5"].append(recall_5)
+        metrics["recall@10"].append(recall_10)
+        metrics["mrr"].append(mrr)
+    
+    # Average metrics
+    return {
+        key: sum(values) / len(values)
+        for key, values in metrics.items()
+    }
+```
+
+### Answer Quality
+
+Evaluate generated answers:
+
+```python
+def evaluate_answer_quality(answer: str, ground_truth: str) -> dict:
+    # Use LLM as a judge
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{
+            "role": "user",
+            "content": f"""Rate the quality of this answer on a scale of 1-5:
+            
+            Question: {question}
+            Ground Truth: {ground_truth}
+            Generated Answer: {answer}
+            
+            Provide:
+            1. Rating (1-5)
+            2. Explanation
+            3. Factual accuracy (correct/incorrect)
+            """
+        }]
+    )
+    
+    return response.choices[0].message.content
+```
+
+## Production Considerations
+
+### Caching
+
+Cache embeddings and frequent queries:
+
+```python
+import redis
+import hashlib
+
+redis_client = redis.Redis(host='localhost', port=6379)
+
+def cached_retrieve(query: str, ttl: int = 3600):
+    # Create cache key
+    cache_key = f"rag:query:{hashlib.md5(query.encode()).hexdigest()}"
+    
+    # Check cache
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+    
+    # Retrieve and cache
+    results = retrieve_context(query)
+    redis_client.setex(cache_key, ttl, json.dumps(results))
+    
+    return results
+```
+
+### Cost Optimization
+
+Reduce LLM costs:
+
+1. **Limit context size**: Only include most relevant passages
+2. **Use smaller models**: GPT-3.5 for simple queries, GPT-4 for complex
+3. **Cache responses**: Reuse answers for similar queries
+4. **Filter before retrieval**: Use structured filters to reduce search space
+
+### Monitoring
+
+Track key metrics:
+
+```python
+import prometheus_client
+
+retrieval_latency = prometheus_client.Histogram(
+    'rag_retrieval_latency_seconds',
+    'Time spent retrieving context'
+)
+
+generation_latency = prometheus_client.Histogram(
+    'rag_generation_latency_seconds',
+    'Time spent generating response'
+)
+
+relevance_score = prometheus_client.Histogram(
+    'rag_relevance_score',
+    'Average relevance score of retrieved documents'
+)
+
+@retrieval_latency.time()
+def monitored_retrieve(query: str):
+    results = retrieve_context(query)
+    
+    # Track relevance
+    avg_relevance = sum(r["relevance"] for r in results) / len(results)
+    relevance_score.observe(avg_relevance)
+    
+    return results
+```
+
+## Complete Example
+
+Here's a full RAG application:
+
+```python
+from vespa.application import Vespa
+import openai
+from typing import Optional
+
+class RAGApplication:
+    def __init__(self, vespa_url: str, openai_key: str):
+        self.app = Vespa(url=vespa_url)
+        openai.api_key = openai_key
+    
+    def retrieve(self, query: str, filters: Optional[dict] = None) -> list:
+        where_clause = "true"
+        if filters:
+            conditions = [f'{k}="{v}"' for k, v in filters.items()]
+            where_clause = " and ".join(conditions)
+        
+        response = self.app.query(
+            yql=f"select * from knowledge where userQuery() and {where_clause}",
+            query=query,
+            ranking="hybrid",
+            hits=5
+        )
+        
+        return response.hits
+    
+    def generate(self, query: str, contexts: list) -> dict:
+        context_text = "\n\n".join([
+            f"[{i+1}] {ctx['fields']['title']}\n{ctx['fields']['content']}"
+            for i, ctx in enumerate(contexts)
+        ])
+        
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Answer questions based on the provided context. Cite sources using [1], [2], etc."
+                },
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context_text}\n\nQuestion: {query}"
+                }
+            ]
+        )
+        
+        return {
+            "answer": response.choices[0].message.content,
+            "sources": contexts,
+            "usage": response.usage
+        }
+    
+    def ask(self, query: str, filters: Optional[dict] = None) -> dict:
+        contexts = self.retrieve(query, filters)
+        if not contexts:
+            return {"error": "No relevant context found"}
+        
+        return self.generate(query, contexts)
+
+# Usage
+rag = RAGApplication(
+    vespa_url="http://localhost:8080",
+    openai_key="sk-..."
+)
+
+result = rag.ask(
+    "What are the benefits of machine learning?",
+    filters={"source": "textbook"}
+)
+
+print(result["answer"])
+for i, source in enumerate(result["sources"]):
+    print(f"\n[{i+1}] {source['fields']['title']}")
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Embeddings" icon="vector-square" href="/ml/embeddings">
+    Configure embedding models for RAG
+  </Card>
+  <Card title="Hybrid Search" icon="magnifying-glass">
+    Combine semantic and keyword search
+  </Card>
+  <Card title="Reranking" icon="ranking-star">
+    Improve retrieval with cross-encoders
+  </Card>
+  <Card title="Streaming" icon="bolt">
+    Real-time updates for RAG knowledge
+  </Card>
+</CardGroup>

@@ -1,0 +1,580 @@
+---
+title: 'Tensors'
+description: 'Multi-dimensional arrays for machine learning and advanced ranking in Vespa'
+---
+
+Tensors are Vespa's native support for multi-dimensional arrays. They're essential for machine learning, semantic search, and advanced ranking operations.
+
+## What are Tensors?
+
+A tensor is a **multi-dimensional array** that can be used in computations. In Vespa:
+
+- Tensors have named dimensions
+- Each dimension can be sparse (mapped) or dense (indexed)
+- Cells contain scalar values (float, double, int8, bfloat16)
+- Operations are optimized for machine learning workloads
+
+<Note>
+Vespa's tensor implementation is available in both Java ([`vespajlib`](https://github.com/vespa-engine/vespa/tree/master/vespajlib)) and C++ ([`eval`](https://github.com/vespa-engine/vespa/tree/master/eval)) for use throughout the system.
+</Note>
+
+## Tensor Implementation
+
+Here's the core Tensor interface from the Java implementation:
+
+```java
+package com.yahoo.tensor;
+
+/**
+ * A multidimensional array which can be used in computations.
+ * 
+ * A tensor consists of a set of dimension names and a set of cells 
+ * containing scalar values. Each cell is identified by its address, 
+ * which consists of a set of dimension-label pairs.
+ */
+public interface Tensor {
+    /** Returns the type of this tensor */
+    TensorType type();
+    
+    /** Returns whether this has any cells */
+    default boolean isEmpty() { return size() == 0; }
+    
+    /** Returns the number of cells in this tensor */
+    default long size() {
+        return sizeAsInt();
+    }
+    
+    /** Returns the value of a cell, or 0.0 if this cell does not exist */
+    double get(TensorAddress address);
+    
+    /** Returns true if this cell exists */
+    boolean has(TensorAddress address);
+    
+    /** Returns the cells of this in some undefined order */
+    Iterator<Cell> cellIterator();
+}
+```
+
+*From [vespajlib/src/main/java/com/yahoo/tensor/Tensor.java:54](https://github.com/vespa-engine/vespa/blob/master/vespajlib/src/main/java/com/yahoo/tensor/Tensor.java#L54)*
+
+## Tensor Types
+
+### Dense Tensors (Indexed)
+
+Dense tensors have dimensions with integer indices:
+
+<CodeGroup>
+
+```javascript Vector
+tensor<float>(x[768])
+```
+
+```javascript Matrix
+tensor<float>(x[100], y[50])
+```
+
+```javascript 3D Tensor
+tensor<float>(batch[32], x[224], y[224])
+```
+
+</CodeGroup>
+
+Dense tensors are stored contiguously in memory - efficient for embeddings and neural network layers.
+
+### Sparse Tensors (Mapped)
+
+Sparse tensors have dimensions with string labels:
+
+<CodeGroup>
+
+```javascript User-Item
+tensor<float>(user{}, item{})
+```
+
+```javascript Document-Term
+tensor<float>(doc{}, term{})
+```
+
+</CodeGroup>
+
+Sparse tensors only store non-zero cells - efficient for very large, sparse data.
+
+### Mixed Tensors
+
+Mixed tensors combine indexed and mapped dimensions:
+
+```javascript
+tensor<float>(user{}, feature[100])
+```
+
+Useful for per-user embeddings or similar use cases.
+
+## Tensor Cell Types
+
+Control memory usage and precision:
+
+<CardGroup cols={2}>
+  <Card title="float" icon="1">
+    32-bit floating point (default)
+  </Card>
+  <Card title="double" icon="2">
+    64-bit floating point
+  </Card>
+  <Card title="bfloat16" icon="0">
+    16-bit brain float (ML optimized)
+  </Card>
+  <Card title="int8" icon="hashtag">
+    8-bit integer (quantized)
+  </Card>
+</CardGroup>
+
+Example with different cell types:
+
+```javascript
+tensor<bfloat16>(x[768])  // Half the memory of float
+tensor<int8>(x[768])      // 1/4 the memory of float
+```
+
+## Using Tensors in Schemas
+
+### Embedding Fields
+
+Store vector embeddings as tensor fields:
+
+```javascript
+schema article {
+    document article {
+        field title type string {
+            indexing: index | summary
+        }
+        
+        field title_embedding type tensor<float>(x[768]) {
+            indexing: attribute
+        }
+        
+        field body_embedding type tensor<float>(x[768]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+            index {
+                hnsw {
+                    max-links-per-node: 16
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
+        }
+    }
+}
+```
+
+*Based on tensor fields in [msmarco.sd:27-49](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L27)*
+
+### Distance Metrics
+
+When indexing tensors for nearest neighbor search:
+
+<Accordion title="angular">
+  Cosine distance (angular separation):
+  ```javascript
+  attribute {
+      distance-metric: angular
+  }
+  ```
+  Best for normalized embeddings.
+</Accordion>
+
+<Accordion title="euclidean">
+  L2 distance:
+  ```javascript
+  attribute {
+      distance-metric: euclidean
+  }
+  ```
+  Standard Euclidean distance.
+</Accordion>
+
+<Accordion title="dotproduct">
+  Negative dot product:
+  ```javascript
+  attribute {
+      distance-metric: dotproduct
+  }
+  ```
+  For maximum inner product search.
+</Accordion>
+
+<Accordion title="hamming">
+  Hamming distance:
+  ```javascript
+  attribute {
+      distance-metric: hamming
+  }
+  ```
+  For binary vectors.
+</Accordion>
+
+## Tensor Operations
+
+Vespa provides rich tensor operations available from the Java Tensor class:
+
+```java
+import com.yahoo.tensor.functions.*;
+
+public interface Tensor {
+    // Arithmetic operations
+    Tensor map(DoubleUnaryOperator mapper);
+    Tensor join(Tensor other, DoubleBinaryOperator combiner);
+    Tensor reduce(Reduce.Aggregator aggregator, String... dimensions);
+    
+    // Linear algebra
+    Tensor matmul(Tensor other, String dimension);
+    
+    // Tensor manipulation
+    Tensor rename(String fromDimension, String toDimension);
+    Tensor concat(Tensor other, String dimension);
+}
+```
+
+*From [Tensor.java:1-23](https://github.com/vespa-engine/vespa/blob/master/vespajlib/src/main/java/com/yahoo/tensor/Tensor.java#L1)*
+
+### Common Operations
+
+<Accordion title="Element-wise Operations">
+  Apply operations to each cell:
+  
+  ```javascript
+  tensor1 + tensor2           // Addition
+  tensor1 * tensor2           // Multiplication
+  tensor1 - tensor2           // Subtraction
+  tensor1 / tensor2           // Division
+  pow(tensor1, 2)            // Power
+  exp(tensor1)               // Exponential
+  ```
+</Accordion>
+
+<Accordion title="Reduction Operations">
+  Aggregate across dimensions:
+  
+  ```javascript
+  sum(tensor, dim)           // Sum
+  max(tensor, dim)           // Maximum
+  min(tensor, dim)           // Minimum
+  avg(tensor, dim)           // Average
+  count(tensor, dim)         // Count
+  ```
+</Accordion>
+
+<Accordion title="Matrix Operations">
+  Linear algebra:
+  
+  ```javascript
+  tensor1 * tensor2          // Dot product (when appropriate)
+  matmul(tensor1, tensor2, dim)  // Matrix multiplication
+  ```
+</Accordion>
+
+<Accordion title="Tensor Functions">
+  Advanced operations:
+  
+  ```javascript
+  concat(tensor1, tensor2, dim)  // Concatenation
+  rename(tensor, from, to)       // Rename dimension
+  expand(tensor, dim)            // Add dimension
+  ```
+</Accordion>
+
+## Tensors in Ranking
+
+### Semantic Search Example
+
+Compute similarity between query and document embeddings:
+
+```javascript
+rank-profile semantic {
+    function similarity() {
+        expression: sum(query(query_embedding) * attribute(doc_embedding))
+    }
+    
+    first-phase {
+        expression: similarity()
+    }
+}
+```
+
+*From [msmarco.sd:73-88](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L73)*
+
+The `*` operator performs element-wise multiplication, and `sum()` reduces to a scalar score.
+
+### Multi-Field Embeddings
+
+Combine embeddings from multiple fields:
+
+```javascript
+rank-profile multi_field_semantic {
+    function title_similarity() {
+        expression: sum(query(query_embedding) * attribute(title_embedding))
+    }
+    
+    function body_similarity() {
+        expression: sum(query(query_embedding) * attribute(body_embedding))
+    }
+    
+    first-phase {
+        expression: 2.0 * title_similarity() + body_similarity()
+    }
+}
+```
+
+*From [msmarco.sd:73-88](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L73)*
+
+## Tensor Literal Syntax
+
+Create tensors directly in expressions:
+
+<CodeGroup>
+
+```javascript Dense Vector
+tensor<float>(x[3]):[1.0, 2.0, 3.0]
+```
+
+```javascript Sparse
+tensor<float>(key{}):{apple:0.8, banana:0.6, orange:0.9}
+```
+
+```javascript Matrix
+tensor<float>(x[2],y[2]):[[1.0, 2.0], [3.0, 4.0]]
+```
+
+```javascript Mixed
+tensor<float>(user{},feature[3]):
+    {user1:[0.1, 0.2, 0.3], user2:[0.4, 0.5, 0.6]}
+```
+
+</CodeGroup>
+
+## Tensor Use Cases
+
+### 1. Semantic Search
+
+Store and query document embeddings:
+
+```javascript
+field embedding type tensor<float>(x[768]) {
+    indexing: attribute | index
+    attribute {
+        distance-metric: angular
+    }
+    index {
+        hnsw {
+            max-links-per-node: 16
+            neighbors-to-explore-at-insert: 200
+        }
+    }
+}
+```
+
+Query:
+```sql
+select * from documents 
+where {targetHits:10}nearestNeighbor(embedding, query_embedding)
+```
+
+### 2. Neural Network Inference
+
+Store model weights as tensors:
+
+```javascript
+function neural_net() {
+    expression {
+        xw(matmul(attribute(input_features), constant(weights_layer1)),
+           constant(bias_layer1),
+           "relu")
+    }
+}
+```
+
+### 3. Personalized Ranking
+
+Per-user feature vectors:
+
+```javascript
+field user_preferences type tensor<float>(category[50]) {
+    indexing: attribute
+}
+
+field product_features type tensor<float>(category[50]) {
+    indexing: attribute
+}
+
+rank-profile personalized {
+    first-phase {
+        expression: sum(query(user_prefs) * attribute(product_features))
+    }
+}
+```
+
+### 4. Collaborative Filtering
+
+Sparse user-item matrices:
+
+```javascript
+field interactions type tensor<float>(user{}, item{}) {
+    indexing: attribute
+}
+```
+
+## Tensor Performance
+
+### Optimization Tips
+
+<CardGroup cols={2}>
+  <Card title="Choose Right Type" icon="shapes">
+    Use dense for embeddings, sparse for categorical data
+  </Card>
+  <Card title="Use Appropriate Precision" icon="gauge">
+    Consider bfloat16 or int8 for large tensors
+  </Card>
+  <Card title="Index for ANN" icon="diagram-project">
+    Add HNSW index for nearest neighbor queries
+  </Card>
+  <Card title="Minimize Dimension" icon="compress">
+    Smaller embeddings = faster computations
+  </Card>
+</CardGroup>
+
+### Memory Usage
+
+Tensor memory depends on cell type and dimensions:
+
+```
+tensor<float>(x[768])    = 768 * 4 bytes  = 3 KB
+tensor<bfloat16>(x[768]) = 768 * 2 bytes  = 1.5 KB
+tensor<int8>(x[768])     = 768 * 1 byte   = 768 bytes
+```
+
+For 1M documents:
+- `float`: 3 GB
+- `bfloat16`: 1.5 GB  
+- `int8`: 768 MB
+
+## Feeding Tensor Data
+
+Send tensor values when feeding documents:
+
+<CodeGroup>
+
+```json JSON
+{
+  "put": "id:article:article::123",
+  "fields": {
+    "title": "Understanding Vespa Tensors",
+    "embedding": {
+      "values": [0.12, -0.45, 0.78, ...]
+    }
+  }
+}
+```
+
+```python Python
+from vespa.application import Vespa
+import numpy as np
+
+app = Vespa(url="http://localhost:8080")
+
+embedding = np.random.randn(768).tolist()
+
+app.feed_data_point(
+    schema="article",
+    data_id="123",
+    fields={
+        "title": "Understanding Vespa Tensors",
+        "embedding": embedding
+    }
+)
+```
+
+</CodeGroup>
+
+## Tensor Evaluation Engine
+
+The evaluation engine optimizes tensor operations:
+
+- **Module**: [`eval`](https://github.com/vespa-engine/vespa/tree/master/eval)
+- Compiles tensor expressions into efficient code
+- Supports multiple backends (CPU, GPU)
+- Automatic optimization based on tensor types
+
+<Note>
+The eval module provides efficient evaluation of ranking expressions and tensor operations on content nodes.
+</Note>
+
+## Advanced Tensor Operations
+
+### Matrix Multiplication
+
+```javascript
+function matrix_mult() {
+    expression: sum(attribute(matrix1) * attribute(matrix2), common_dimension)
+}
+```
+
+### Normalization
+
+```javascript
+function l2_normalize() {
+    expression: attribute(vector) / sqrt(sum(pow(attribute(vector), 2)))
+}
+```
+
+### Softmax
+
+```javascript
+function softmax() {
+    expression {
+        exp(attribute(logits)) / sum(exp(attribute(logits)))
+    }
+}
+```
+
+### Cosine Similarity
+
+```javascript
+function cosine_similarity() {
+    expression {
+        sum(query(q) * attribute(d)) / 
+        (sqrt(sum(pow(query(q), 2))) * sqrt(sum(pow(attribute(d), 2))))
+    }
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Simple" icon="seedling">
+    Begin with basic embeddings, add complexity as needed
+  </Card>
+  <Card title="Profile Memory" icon="memory">
+    Monitor tensor memory usage in production
+  </Card>
+  <Card title="Test Precision" icon="flask">
+    Validate that bfloat16/int8 maintains quality
+  </Card>
+  <Card title="Index Large Tensors" icon="database">
+    Use HNSW for tensors with >100 dimensions
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Ranking" icon="ranking-star" href="/concepts/ranking">
+    Use tensors in ranking expressions
+  </Card>
+  <Card title="Schemas" icon="code" href="/concepts/schemas">
+    Define tensor fields
+  </Card>
+  <Card title="Search" icon="magnifying-glass" href="/concepts/search">
+    Query tensor fields
+  </Card>
+</CardGroup>

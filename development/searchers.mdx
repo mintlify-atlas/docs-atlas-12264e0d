@@ -1,0 +1,395 @@
+---
+title: Writing Searchers
+description: Create custom Searcher components to process queries and results in Vespa
+---
+
+Searchers are the fundamental building blocks for implementing custom query processing and result manipulation in Vespa. They participate in a chain of responsibility pattern where queries pass through a sequence of searchers, each potentially modifying the query or result.
+
+## Overview
+
+A Searcher can:
+- **Modify queries** before they are executed (query rewriting)
+- **Process results** by altering, reorganizing, or adding hits
+- **Federate** to multiple search chains in series or parallel
+- **Act as a source** by creating results from internal or external data
+- **Implement workflows** by calling downstream searchers multiple times
+
+## Basic Searcher Structure
+
+All custom searchers extend the `com.yahoo.search.Searcher` class and override the `search` method:
+
+```java
+package com.example;
+
+import com.yahoo.search.Query;
+import com.yahoo.search.Result;
+import com.yahoo.search.Searcher;
+import com.yahoo.search.searchchain.Execution;
+
+public class MySearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Modify query before passing it on
+        query.properties().set("myProperty", "value");
+        
+        // Pass query to next searcher in chain
+        Result result = execution.search(query);
+        
+        // Process result before returning
+        result.hits().add(createMyHit());
+        
+        return result;
+    }
+}
+```
+
+## Searcher Lifecycle
+
+<Steps>
+  <Step title="Construction">
+    The searcher is instantiated with its configuration. Build any required in-memory structures here.
+    
+    ```java
+    public class ConfiguredSearcher extends Searcher {
+        private final String myConfig;
+        
+        public ConfiguredSearcher(MyConfig config) {
+            this.myConfig = config.value();
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="In Service">
+    The `search()` method is called by multiple threads in parallel. Keep shared data structures immutable or use proper synchronization.
+  </Step>
+
+  <Step title="Deconstruction">
+    Override `deconstruct()` to clean up resources. This is called when the searcher is being removed.
+    
+    ```java
+    @Override
+    public void deconstruct() {
+        super.deconstruct();
+        // Clean up resources
+    }
+    ```
+  </Step>
+</Steps>
+
+## Common Searcher Patterns
+
+### Query Processor
+
+Modifies the query before execution:
+
+```java
+import com.yahoo.prelude.query.WordItem;
+import com.yahoo.prelude.query.CompositeItem;
+
+public class QueryEnricherSearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Add a term to the query
+        CompositeItem root = (CompositeItem) query.getModel().getQueryTree().getRoot();
+        if (root != null) {
+            root.addItem(new WordItem("boost", "title"));
+        }
+        
+        // Continue processing
+        return execution.search(query);
+    }
+}
+```
+
+### Result Processor
+
+Modifies results after execution:
+
+```java
+import com.yahoo.search.result.Hit;
+
+public class ResultEnricherSearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        Result result = execution.search(query);
+        
+        // Enrich each hit with additional data
+        for (Hit hit : result.hits()) {
+            hit.setField("enriched", true);
+            hit.setField("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+}
+```
+
+### Federator
+
+Searches multiple sources and combines results:
+
+```java
+import com.yahoo.search.searchchain.AsyncExecution;
+import java.util.List;
+import java.util.ArrayList;
+
+public class FederatorSearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        // Create parallel executions to different chains
+        AsyncExecution news = new AsyncExecution("news", execution);
+        AsyncExecution images = new AsyncExecution("images", execution);
+        
+        // Start parallel searches
+        news.search(query.clone());
+        images.search(query.clone());
+        
+        // Combine results
+        Result combined = new Result(query);
+        combined.hits().addAll(news.get().hits());
+        combined.hits().addAll(images.get().hits());
+        
+        return combined;
+    }
+}
+```
+
+### Source Searcher
+
+Generates results from custom data sources:
+
+```java
+import com.yahoo.search.result.Hit;
+import java.util.List;
+
+public class CustomSourceSearcher extends Searcher {
+
+    @Override
+    public Result search(Query query, Execution execution) {
+        Result result = new Result(query);
+        
+        // Fetch from external source
+        List<MyData> data = fetchFromExternalAPI(query.getModel().getQueryString());
+        
+        // Convert to hits
+        for (MyData item : data) {
+            Hit hit = new Hit(item.getId());
+            hit.setField("title", item.getTitle());
+            hit.setField("content", item.getContent());
+            hit.setRelevance(item.getScore());
+            result.hits().add(hit);
+        }
+        
+        return result;
+    }
+    
+    private List<MyData> fetchFromExternalAPI(String query) {
+        // Implementation here
+        return List.of();
+    }
+}
+```
+
+## Constructor Injection
+
+Vespa supports dependency injection in searcher constructors:
+
+```java
+import com.yahoo.component.ComponentId;
+import com.yahoo.component.annotation.Inject;
+
+public class InjectableSearcher extends Searcher {
+    private final MyService service;
+    
+    @Inject
+    public InjectableSearcher(ComponentId id, MyService service) {
+        super(id);
+        this.service = service;
+    }
+}
+```
+
+Constructor priority:
+1. `(ComponentId, ConfigClass1, ConfigClass2, ...)`
+2. `(String, ConfigClass1, ConfigClass2, ...)`
+3. `(ConfigClass1, ConfigClass2, ...)`
+4. `(ComponentId)`
+5. `(String)`
+6. Default no-argument constructor
+
+## Search Chain Configuration
+
+Add your searcher to `services.xml`:
+
+```xml
+<container id="default" version="1.0">
+  <search>
+    <chain id="default" inherits="vespa">
+      <searcher id="com.example.MySearcher" bundle="my-bundle"/>
+    </chain>
+  </search>
+</container>
+```
+
+### Chain Dependencies
+
+Control ordering with annotations:
+
+```java
+import com.yahoo.component.chain.dependencies.After;
+import com.yahoo.component.chain.dependencies.Before;
+import com.yahoo.component.chain.dependencies.Provides;
+
+@After("OtherSearcher")
+@Before("AnotherSearcher")
+@Provides("MyFeature")
+public class OrderedSearcher extends Searcher {
+    // ...
+}
+```
+
+## Real-World Example: Stemming
+
+Here's a simplified version of Vespa's `StemmingSearcher` from `~/workspace/source/container-search/src/main/java/com/yahoo/prelude/querytransform/StemmingSearcher.java:62`:
+
+```java
+import com.yahoo.component.annotation.Inject;
+import com.yahoo.language.Linguistics;
+import com.yahoo.prelude.IndexFacts;
+import com.yahoo.search.searchchain.PhaseNames;
+
+@After(PhaseNames.UNBLENDED_RESULT)
+@Provides("Stemming")
+public class StemmingSearcher extends Searcher {
+    
+    private final Linguistics linguistics;
+    
+    @Inject
+    public StemmingSearcher(ComponentId id, Linguistics linguistics) {
+        super(id);
+        this.linguistics = linguistics;
+    }
+    
+    @Override
+    public Result search(Query query, Execution execution) {
+        if (query.properties().getBoolean("nostemming")) {
+            return execution.search(query);
+        }
+        
+        IndexFacts.Session indexFacts = 
+            execution.context().getIndexFacts().newSession(query);
+        
+        // Replace query terms with stems
+        Item newRoot = replaceTerms(query, indexFacts);
+        query.getModel().getQueryTree().setRoot(newRoot);
+        
+        query.trace("Stemming", true, 2);
+        
+        return execution.search(query);
+    }
+    
+    private Item replaceTerms(Query query, IndexFacts.Session indexFacts) {
+        // Stemming logic here
+        return query.getModel().getQueryTree().getRoot();
+    }
+}
+```
+
+## Error Handling
+
+<Accordion title="Handling Expected Events">
+  Create a Result with an error message:
+  
+  ```java
+  if (invalidCondition) {
+      return new Result(query, 
+          ErrorMessage.createBadRequest("Invalid parameter"));
+  }
+  ```
+</Accordion>
+
+<Accordion title="Handling Unexpected Events">
+  Throw a RuntimeException:
+  
+  ```java
+  if (criticalFailure) {
+      throw new RuntimeException("Critical failure: " + details);
+  }
+  ```
+</Accordion>
+
+<Accordion title="Recoverable User Errors">
+  Add a FeedbackHit explaining the condition:
+  
+  ```java
+  import com.yahoo.search.result.FeedbackHit;
+  
+  FeedbackHit feedback = new FeedbackHit();
+  feedback.setField("message", "Please correct your query");
+  result.hits().add(feedback);
+  ```
+</Accordion>
+
+## Fill Operations
+
+For federating searchers, override `fill()` to fetch additional data:
+
+```java
+@Override
+public void fill(Result result, String summaryClass, Execution execution) {
+    // Custom fill logic
+    for (Hit hit : result.hits()) {
+        if (hit.isFilled(summaryClass)) continue;
+        // Fetch and populate fields
+        hit.setField("fullContent", fetchContent(hit.getId()));
+    }
+    
+    // Continue to next searcher
+    execution.fill(result, summaryClass);
+}
+```
+
+## Testing
+
+Test searchers using the Execution framework:
+
+```java
+import com.yahoo.search.searchchain.Execution;
+import com.yahoo.component.chain.Chain;
+import org.junit.jupiter.api.Test;
+
+public class MySearcherTest {
+    
+    @Test
+    public void testSearcher() {
+        MySearcher searcher = new MySearcher();
+        Chain<Searcher> chain = new Chain<>(searcher);
+        Execution execution = new Execution(chain, Execution.Context.createContextStub());
+        
+        Query query = new Query("test query");
+        Result result = execution.search(query);
+        
+        assertEquals(1, result.getHitCount());
+    }
+}
+```
+
+## Performance Tips
+
+<Note>
+- **Avoid synchronization**: Keep data structures built during construction read-only
+- **Use tracing**: Call `query.trace()` to add debug information
+- **Minimize allocations**: Reuse objects when possible
+- **Profile carefully**: Searchers are on the critical path for all queries
+</Note>
+
+## Next Steps
+
+- Learn about [Document Processors](/development/document-processors) for feed processing
+- Explore [HTTP Handlers](/development/handlers) for custom endpoints
+- See [Plugins and Bundles](/development/plugins) for packaging components

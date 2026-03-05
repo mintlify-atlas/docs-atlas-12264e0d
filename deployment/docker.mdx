@@ -1,0 +1,639 @@
+---
+title: Docker Deployment
+description: Run Vespa in Docker containers for development and production environments
+---
+
+## Overview
+
+Vespa provides official Docker images for easy deployment in containerized environments. Docker is ideal for local development, testing, and production deployments using container orchestration platforms.
+
+## Quick Start
+
+### Running Vespa in Docker
+
+Start a single-node Vespa instance:
+
+```bash
+docker run --detach --name vespa --hostname vespa-container \
+  --publish 8080:8080 --publish 19071:19071 \
+  vespaengine/vespa
+```
+
+<Note>
+The container needs a few seconds to start. Wait for the configuration server to be ready before deploying applications.
+</Note>
+
+### Verify Vespa is Running
+
+Check the configuration server status:
+
+```bash
+curl http://localhost:19071/state/v1/health
+```
+
+Expected response:
+```json
+{
+  "status": {"code": "up"},
+  "metrics": {...}
+}
+```
+
+### Deploy an Application
+
+Once Vespa is running, deploy your application package:
+
+```bash
+# Using vespa-cli
+vespa deploy --wait 300 my-app
+
+# Or using curl
+zip -r my-app.zip my-app/
+curl --header Content-Type:application/zip \
+  --data-binary @my-app.zip \
+  http://localhost:19071/application/v2/tenant/default/prepareandactivate
+```
+
+## Docker Images
+
+### Official Images
+
+Vespa provides several Docker images:
+
+- **vespaengine/vespa**: Full Vespa installation (latest stable)
+- **vespaengine/vespa:8**: Specific major version
+- **vespaengine/vespa:8.123.45**: Specific version
+
+```bash
+# Latest stable version
+docker pull vespaengine/vespa
+
+# Specific version
+docker pull vespaengine/vespa:8.123.45
+```
+
+### Image Tags
+
+<Accordion title="Available Tags">
+  - `latest` - Most recent stable release
+  - `8` - Latest in major version 8
+  - `8.123` - Latest in minor version 8.123
+  - `8.123.45` - Specific patch version
+</Accordion>
+
+## Port Mappings
+
+Vespa uses several ports that should be mapped:
+
+```bash
+docker run --detach --name vespa \
+  --publish 8080:8080   # Container HTTP (queries, feeding) \
+  --publish 19071:19071 # Config server \
+  --publish 19050:19050 # Node admin RPC (optional) \
+  --publish 19092:19092 # Log server (optional) \
+  --publish 19100:19100 # Search node RPC (optional) \
+  vespaengine/vespa
+```
+
+<Note>
+For production deployments, map all necessary ports based on your services configuration.
+</Note>
+
+## Volume Mounts
+
+### Persistent Data
+
+Mount volumes to persist data between container restarts:
+
+```bash
+docker run --detach --name vespa \
+  --hostname vespa-container \
+  --publish 8080:8080 --publish 19071:19071 \
+  --volume vespa-data:/opt/vespa/var \
+  vespaengine/vespa
+```
+
+### Application Package
+
+Mount your application package directly:
+
+```bash
+docker run --detach --name vespa \
+  --hostname vespa-container \
+  --publish 8080:8080 --publish 19071:19071 \
+  --volume $(pwd)/my-app:/app \
+  vespaengine/vespa
+```
+
+Then deploy from within the container:
+
+```bash
+docker exec vespa bash -c \
+  'vespa-deploy prepare /app && vespa-deploy activate'
+```
+
+## Docker Compose
+
+### Single Node Setup
+
+Create a `docker-compose.yml` for easy management:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  vespa:
+    image: vespaengine/vespa
+    hostname: vespa-container
+    container_name: vespa
+    ports:
+      - "8080:8080"
+      - "19071:19071"
+    volumes:
+      - vespa-data:/opt/vespa/var
+      - ./my-app:/app
+    environment:
+      - VESPA_CONFIGSERVERS=vespa-container
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19071/state/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  vespa-data:
+```
+
+Start the service:
+
+```bash
+docker-compose up -d
+```
+
+### Multi-node Setup
+
+For a multi-node cluster with Docker Compose:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  config:
+    image: vespaengine/vespa
+    hostname: config
+    container_name: vespa-config
+    ports:
+      - "19071:19071"
+    environment:
+      - VESPA_CONFIGSERVERS=config
+    volumes:
+      - config-data:/opt/vespa/var
+    networks:
+      - vespa-net
+
+  container1:
+    image: vespaengine/vespa
+    hostname: container1
+    container_name: vespa-container1
+    ports:
+      - "8080:8080"
+    environment:
+      - VESPA_CONFIGSERVERS=config
+    depends_on:
+      - config
+    networks:
+      - vespa-net
+
+  container2:
+    image: vespaengine/vespa
+    hostname: container2
+    container_name: vespa-container2
+    ports:
+      - "8081:8080"
+    environment:
+      - VESPA_CONFIGSERVERS=config
+    depends_on:
+      - config
+    networks:
+      - vespa-net
+
+  content1:
+    image: vespaengine/vespa
+    hostname: content1
+    container_name: vespa-content1
+    environment:
+      - VESPA_CONFIGSERVERS=config
+    depends_on:
+      - config
+    volumes:
+      - content1-data:/opt/vespa/var
+    networks:
+      - vespa-net
+
+  content2:
+    image: vespaengine/vespa
+    hostname: content2
+    container_name: vespa-content2
+    environment:
+      - VESPA_CONFIGSERVERS=config
+    depends_on:
+      - config
+    volumes:
+      - content2-data:/opt/vespa/var
+    networks:
+      - vespa-net
+
+volumes:
+  config-data:
+  content1-data:
+  content2-data:
+
+networks:
+  vespa-net:
+    driver: bridge
+```
+
+## Kubernetes Deployment
+
+### StatefulSet for Content Nodes
+
+Deploy Vespa content nodes as a StatefulSet:
+
+```yaml vespa-content.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vespa-content
+spec:
+  serviceName: vespa-content
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vespa-content
+  template:
+    metadata:
+      labels:
+        app: vespa-content
+    spec:
+      containers:
+      - name: vespa
+        image: vespaengine/vespa:latest
+        ports:
+        - containerPort: 19100
+          name: rpc
+        env:
+        - name: VESPA_CONFIGSERVERS
+          value: "vespa-config.default.svc.cluster.local"
+        volumeMounts:
+        - name: vespa-data
+          mountPath: /opt/vespa/var
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "2"
+          limits:
+            memory: "16Gi"
+            cpu: "4"
+  volumeClaimTemplates:
+  - metadata:
+      name: vespa-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 100Gi
+```
+
+### Deployment for Container Nodes
+
+Deploy query container nodes as a Deployment:
+
+```yaml vespa-container.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vespa-container
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vespa-container
+  template:
+    metadata:
+      labels:
+        app: vespa-container
+    spec:
+      containers:
+      - name: vespa
+        image: vespaengine/vespa:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: VESPA_CONFIGSERVERS
+          value: "vespa-config.default.svc.cluster.local"
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+        livenessProbe:
+          httpGet:
+            path: /state/v1/health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vespa-container
+spec:
+  selector:
+    app: vespa-container
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: LoadBalancer
+```
+
+### Config Server Service
+
+```yaml vespa-config.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vespa-config
+spec:
+  serviceName: vespa-config
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vespa-config
+  template:
+    metadata:
+      labels:
+        app: vespa-config
+    spec:
+      containers:
+      - name: vespa
+        image: vespaengine/vespa:latest
+        ports:
+        - containerPort: 19071
+          name: config
+        env:
+        - name: VESPA_CONFIGSERVERS
+          value: "vespa-config-0.vespa-config.default.svc.cluster.local"
+        volumeMounts:
+        - name: config-data
+          mountPath: /opt/vespa/var
+  volumeClaimTemplates:
+  - metadata:
+      name: config-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vespa-config
+spec:
+  clusterIP: None
+  selector:
+    app: vespa-config
+  ports:
+  - port: 19071
+    targetPort: 19071
+```
+
+## Environment Variables
+
+Configure Vespa using environment variables:
+
+```bash
+docker run --detach --name vespa \
+  --env VESPA_CONFIGSERVERS=config-server.example.com \
+  --env VESPA_WEB_SERVICE_PORT=8080 \
+  --env JAVA_OPTS="-Xms2g -Xmx4g" \
+  vespaengine/vespa
+```
+
+### Common Environment Variables
+
+- `VESPA_CONFIGSERVERS`: Config server hostname(s)
+- `VESPA_WEB_SERVICE_PORT`: Container HTTP port (default: 8080)
+- `JAVA_OPTS`: JVM options for Java components
+
+## Resource Limits
+
+### Memory Configuration
+
+Set appropriate memory limits:
+
+```bash
+docker run --detach --name vespa \
+  --memory 8g \
+  --memory-swap 8g \
+  --env JAVA_OPTS="-Xms4g -Xmx6g" \
+  vespaengine/vespa
+```
+
+<Warning>
+Vespa requires sufficient memory for optimal performance. Allocate at least 4GB for development and 16GB+ for production workloads.
+</Warning>
+
+### CPU Configuration
+
+```bash
+docker run --detach --name vespa \
+  --cpus 4 \
+  vespaengine/vespa
+```
+
+## Development Workflow
+
+### Live Application Updates
+
+For development, use volume mounts for rapid iteration:
+
+<Steps>
+  <Step title="Start Container with Volume">
+    ```bash
+    docker run --detach --name vespa \
+      --publish 8080:8080 --publish 19071:19071 \
+      --volume $(pwd)/my-app:/workspace/my-app \
+      vespaengine/vespa
+    ```
+  </Step>
+  
+  <Step title="Deploy Application">
+    ```bash
+    vespa deploy my-app --target local
+    ```
+  </Step>
+  
+  <Step title="Make Changes">
+    Edit files in `my-app/` directory
+  </Step>
+  
+  <Step title="Redeploy">
+    ```bash
+    vespa deploy my-app --target local
+    ```
+  </Step>
+</Steps>
+
+### Debugging
+
+Access container logs:
+
+```bash
+# View Vespa logs
+docker exec vespa vespa-logfmt
+
+# Follow logs
+docker logs -f vespa
+
+# Access container shell
+docker exec -it vespa bash
+```
+
+## Production Considerations
+
+<Steps>
+  <Step title="Use Persistent Volumes">
+    Always mount volumes for `/opt/vespa/var` to persist data
+  </Step>
+  
+  <Step title="Configure Resource Limits">
+    Set appropriate CPU and memory limits based on workload
+  </Step>
+  
+  <Step title="Enable Health Checks">
+    Use Docker health checks or Kubernetes probes to monitor service health
+  </Step>
+  
+  <Step title="Network Configuration">
+    Ensure proper network connectivity between container nodes in multi-node setups
+  </Step>
+  
+  <Step title="Security">
+    Use network policies and access controls to secure Vespa endpoints
+  </Step>
+</Steps>
+
+## Container Orchestration
+
+### Docker Swarm
+
+Deploy Vespa in Docker Swarm:
+
+```yaml docker-stack.yml
+version: '3.8'
+
+services:
+  vespa-config:
+    image: vespaengine/vespa
+    networks:
+      - vespa-net
+    environment:
+      - VESPA_CONFIGSERVERS=vespa-config
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - config-data:/opt/vespa/var
+
+  vespa-container:
+    image: vespaengine/vespa
+    networks:
+      - vespa-net
+    environment:
+      - VESPA_CONFIGSERVERS=vespa-config
+    ports:
+      - "8080:8080"
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+
+  vespa-content:
+    image: vespaengine/vespa
+    networks:
+      - vespa-net
+    environment:
+      - VESPA_CONFIGSERVERS=vespa-config
+    deploy:
+      replicas: 3
+    volumes:
+      - content-data:/opt/vespa/var
+
+volumes:
+  config-data:
+  content-data:
+
+networks:
+  vespa-net:
+    driver: overlay
+```
+
+Deploy the stack:
+
+```bash
+docker stack deploy -c docker-stack.yml vespa
+```
+
+## Troubleshooting
+
+### Container Won't Start
+
+Check logs for errors:
+
+```bash
+docker logs vespa
+```
+
+### Config Server Not Ready
+
+Wait for config server initialization:
+
+```bash
+while [[ $(curl -s -o /dev/null -w '%{http_code}' http://localhost:19071/state/v1/health) != 200 ]]; do
+  echo "Waiting for config server..."
+  sleep 5
+done
+echo "Config server ready!"
+```
+
+### Application Deployment Fails
+
+Validate application package:
+
+```bash
+vespa validate my-app
+```
+
+### Performance Issues
+
+Check resource allocation:
+
+```bash
+docker stats vespa
+```
+
+## Related Resources
+
+- [Application Packages](/deployment/application-packages)
+- [services.xml Configuration](/deployment/services-xml)
+- [Multi-node Systems](/deployment/multinode-systems)
+- [Vespa Cloud](/deployment/vespa-cloud)

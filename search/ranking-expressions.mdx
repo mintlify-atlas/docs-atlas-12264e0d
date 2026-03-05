@@ -1,0 +1,589 @@
+---
+title: Ranking Expressions
+description: Define custom ranking expressions to control result ordering in Vespa
+---
+
+Ranking expressions are mathematical expressions that determine the relevance score of each document. Vespa provides a powerful ranking framework with access to hundreds of built-in features and support for custom expressions.
+
+## Overview
+
+Ranking in Vespa is configured through rank profiles in your schema. The ranking framework (`container-search/src/main/java/com/yahoo/search/query/Ranking.java`) supports:
+
+- Multi-phase ranking (first-phase, second-phase, global-phase)
+- Access to rank features from query, document, and match data
+- Custom rank expressions with mathematical operations
+- Machine learning model integration
+
+## Rank Profiles
+
+Define rank profiles in your schema:
+
+```schema
+schema product {
+  document product {
+    field title type string {
+      indexing: summary | index
+      index: enable-bm25
+    }
+    field price type double {
+      indexing: summary | attribute
+    }
+    field rating type double {
+      indexing: summary | attribute
+    }
+  }
+  
+  rank-profile default {
+    first-phase {
+      expression: nativeRank(title)
+    }
+  }
+  
+  rank-profile custom {
+    first-phase {
+      expression: bm25(title) + attribute(rating) * 10
+    }
+  }
+}
+```
+
+## Multi-Phase Ranking
+
+### First Phase
+
+Evaluated for all matched documents. Keep this computationally lightweight.
+
+```schema
+rank-profile multi-phase {
+  first-phase {
+    expression: bm25(title) + freshness(timestamp)
+  }
+}
+```
+
+### Second Phase
+
+Evaluated for top-k documents from first phase. Can be more expensive.
+
+```schema
+rank-profile multi-phase {
+  first-phase {
+    expression: bm25(title)
+  }
+  
+  second-phase {
+    expression: (
+      bm25(title) * 0.5 +
+      bm25(body) * 0.3 +
+      attribute(rating) * 20
+    )
+    rerank-count: 100
+  }
+}
+```
+
+From the source (`container-search/src/main/java/com/yahoo/search/query/Ranking.java:49-50`):
+
+```java
+public static final String RERANKCOUNT = "rerankCount";
+public static final String KEEPRANKCOUNT = "keepRankCount";
+```
+
+### Global Phase
+
+Evaluated across all content nodes for the final top-k. Used for expensive operations like cross-encoders.
+
+```schema
+rank-profile with-global {
+  first-phase {
+    expression: bm25(title)
+  }
+  
+  global-phase {
+    expression: sum(onnx(cross_encoder))
+    rerank-count: 10
+  }
+}
+```
+
+## Built-in Rank Features
+
+### Text Features
+
+#### BM25
+
+From the implementation (`searchlib/src/vespa/searchlib/features/bm25_feature.cpp`), BM25 computes relevance based on term frequency and document length.
+
+```schema
+rank-profile bm25-ranking {
+  first-phase {
+    expression: bm25(title) + bm25(body)
+  }
+}
+```
+
+#### fieldMatch
+
+Advanced text matching score:
+
+```schema
+first-phase {
+  expression: fieldMatch(title)
+}
+```
+
+#### nativeRank
+
+Vespa's default text ranking:
+
+```schema
+first-phase {
+  expression: nativeRank(title, body)
+}
+```
+
+### Attribute Features
+
+Access document attributes directly:
+
+```schema
+first-phase {
+  expression: (
+    bm25(title) + 
+    attribute(rating) * 10 +
+    attribute(popularity)
+  )
+}
+```
+
+### Distance Features
+
+#### closeness
+
+From `searchlib/src/vespa/searchlib/features/closenessfeature.h`, the closeness feature computes normalized distance scores.
+
+```schema
+rank-profile location-aware {
+  first-phase {
+    expression: closeness(field, location) * 1000
+  }
+}
+```
+
+#### distance
+
+Raw distance calculation:
+
+```schema
+first-phase {
+  expression: 1 / (1 + distance(field, location))
+}
+```
+
+From `searchlib/src/vespa/searchlib/features/distancefeature.h:18`:
+
+```cpp
+static const feature_t DEFAULT_DISTANCE;
+```
+
+### Term Features
+
+#### term().significance
+
+Term IDF-based significance:
+
+```schema
+first-phase {
+  expression: term(0).significance * fieldMatch(title)
+}
+```
+
+#### term().weight
+
+Query term weight:
+
+```schema
+first-phase {
+  expression: term(0).weight * bm25(title)
+}
+```
+
+### Match Features
+
+#### fieldLength
+
+```schema
+first-phase {
+  expression: bm25(title) / fieldLength(title)
+}
+```
+
+#### fieldTermMatch
+
+Per-term matching information:
+
+```schema
+first-phase {
+  expression: fieldTermMatch(title, 0).occurrences
+}
+```
+
+#### termDistance
+
+Distance between query terms:
+
+```schema
+first-phase {
+  expression: 1 / (1 + termDistance(title, 0, 1).reverse)
+}
+```
+
+From config (`config-model/src/test/derived/rankingexpression/rank-profiles.cfg`):
+
+```
+rankingExpression(myplus) + reduce(rankingExpression(mymul), sum) + firstPhase + 
+term(0).significance + fieldLength(artist) + fieldTermMatch(title,0).occurrences + 
+termDistance(title,1,2).reverse + closeness(field,t1)
+```
+
+### Freshness Features
+
+#### age
+
+Document age in seconds:
+
+```schema
+first-phase {
+  expression: bm25(title) * exp(-age(timestamp) / 86400)
+}
+```
+
+#### freshness
+
+Normalized freshness score:
+
+```schema
+first-phase {
+  expression: freshness(timestamp)
+}
+```
+
+## Mathematical Operations
+
+Ranking expressions support standard mathematical operations:
+
+### Arithmetic
+
+```schema
+expression: (bm25(title) + bm25(body)) * attribute(boost)
+```
+
+### Functions
+
+<CodeGroup>
+```schema Exponential
+expression: exp(-distance(location) / 1000)
+```
+
+```schema Logarithm
+expression: log(1 + attribute(view_count))
+```
+
+```schema Power
+expression: pow(attribute(rating), 2)
+```
+
+```schema Square Root
+expression: sqrt(attribute(popularity))
+```
+</CodeGroup>
+
+### Conditionals
+
+```schema
+expression: if(attribute(in_stock) > 0, 
+               bm25(title) * 1.5, 
+               bm25(title) * 0.5)
+```
+
+### Aggregations
+
+```schema
+expression: sum(bm25(title), bm25(body), bm25(description))
+```
+
+Other aggregations: `max()`, `min()`, `avg()`, `count()`
+
+## Tensor Expressions
+
+Tensor operations for vector similarity:
+
+```schema
+rank-profile tensor-similarity {
+  first-phase {
+    expression: closeness(field, embedding)
+  }
+  
+  second-phase {
+    expression: sum(
+      query(query_vector) * attribute(doc_vector)
+    )
+  }
+}
+```
+
+### Tensor Operations
+
+- `sum()`: Sum tensor elements
+- `reduce()`: Reduce tensor dimensions
+- `*`: Element-wise or matrix multiplication
+- `+`: Element-wise addition
+- `join()`: Join tensors with operation
+
+## Query Features
+
+Pass features from the query:
+
+```schema
+rank-profile with-query-features {
+  first-phase {
+    expression: bm25(title) * query(title_weight) + attribute(rating) * query(rating_weight)
+  }
+}
+```
+
+Set in query:
+
+```http
+POST /search/
+{
+  "yql": "select * from product where title contains 'laptop'",
+  "ranking.features.query(title_weight)": 2.0,
+  "ranking.features.query(rating_weight)": 0.5
+}
+```
+
+## Rank Properties
+
+Configure ranking behavior:
+
+```schema
+rank-profile custom {
+  rank-properties {
+    bm25(title).k1: 1.5
+    bm25(title).b: 0.8
+    fieldMatch(title).maxAlternativeSegmentations: 10
+  }
+  
+  first-phase {
+    expression: bm25(title)
+  }
+}
+```
+
+From the source (`container-search/src/main/java/com/yahoo/search/query/Ranking.java:55`):
+
+```java
+public static final String PROPERTIES = "properties";
+```
+
+## Machine Learning Models
+
+### ONNX Models
+
+Integrate ONNX models:
+
+```schema
+rank-profile ml-ranking {
+  first-phase {
+    expression: bm25(title)
+  }
+  
+  second-phase {
+    expression: sum(onnx(my_model))
+    rerank-count: 100
+  }
+  
+  onnx-model my_model {
+    file: models/model.onnx
+    input title_embedding: attribute(title_vector)
+    input query_embedding: query(query_vector)
+  }
+}
+```
+
+### LightGBM Models
+
+```schema
+rank-profile lgbm-ranking {
+  first-phase {
+    expression: bm25(title)
+  }
+  
+  second-phase {
+    expression: lightgbm("model.json")
+    rerank-count: 100
+  }
+}
+```
+
+## Function Macros
+
+Define reusable functions:
+
+```schema
+rank-profile with-functions {
+  function text_score() {
+    expression: bm25(title) + bm25(body)
+  }
+  
+  function quality_score() {
+    expression: attribute(rating) * log(1 + attribute(review_count))
+  }
+  
+  first-phase {
+    expression: text_score() * 0.7 + quality_score() * 0.3
+  }
+}
+```
+
+## Match Phase Configuration
+
+Limit documents evaluated in ranking:
+
+```schema
+rank-profile efficient {
+  match-phase {
+    attribute: quality_score
+    order: descending
+    max-hits: 10000
+  }
+  
+  first-phase {
+    expression: bm25(title) + attribute(quality_score)
+  }
+}
+```
+
+From the source (`container-search/src/main/java/com/yahoo/search/query/Ranking.java:58`):
+
+```java
+@Deprecated // TODO: Remove on Vespa 9
+public static final String MATCH_PHASE = "matchPhase";
+```
+
+## Debugging Rank Scores
+
+Return feature values for debugging:
+
+```http
+POST /search/
+{
+  "yql": "select * from product where title contains 'laptop'",
+  "ranking.profile": "custom",
+  "ranking.listFeatures": true
+}
+```
+
+This returns all feature values used in ranking.
+
+## Best Practices
+
+<Steps>
+  <Step title="Use multi-phase ranking">
+    Put cheap features in first-phase, expensive features in second-phase
+  </Step>
+  
+  <Step title="Normalize features">
+    Ensure features have similar scales (use log, normalization)
+  </Step>
+  
+  <Step title="Test incrementally">
+    Add features one at a time and measure impact on relevance
+  </Step>
+  
+  <Step title="Monitor performance">
+    Track ranking latency, especially for second-phase and ML models
+  </Step>
+  
+  <Step title="Use query features for A/B testing">
+    Pass feature weights as query parameters for easy experimentation
+  </Step>
+</Steps>
+
+## Common Patterns
+
+### Text + Popularity
+
+```schema
+first-phase {
+  expression: bm25(title) * log(1 + attribute(popularity))
+}
+```
+
+### Text + Recency
+
+```schema
+first-phase {
+  expression: bm25(title) * exp(-age(timestamp) / 86400)
+}
+```
+
+### Text + Quality + Location
+
+```schema
+first-phase {
+  expression: (
+    bm25(title) * 0.5 +
+    attribute(rating) * 5 +
+    closeness(field, location) * 100
+  )
+}
+```
+
+### Weighted Multi-Field
+
+```schema
+first-phase {
+  expression: (
+    bm25(title) * 3 +
+    bm25(body) * 1 +
+    bm25(tags) * 2
+  )
+}
+```
+
+## Performance Optimization
+
+### First-Phase Optimization
+
+- Avoid expensive operations (ML models, complex math)
+- Use attributes instead of summary fields
+- Minimize field accesses
+
+### Second-Phase Tuning
+
+- Set appropriate `rerank-count` (typically 100-1000)
+- Balance accuracy vs. latency
+- Profile expensive operations
+
+### Attribute Requirements
+
+Fields used in ranking must be attributes:
+
+```schema
+field rating type double {
+  indexing: summary | attribute
+  attribute: fast-search
+}
+```
+
+<Warning>
+Accessing non-attribute fields in ranking expressions will cause errors. Always use `attribute` indexing for fields used in ranking.
+</Warning>
+
+## Next Steps
+
+- Explore [Text Search](/search/text-search) for BM25 details
+- Learn about [Vector Search](/search/vector-search) for tensor operations
+- Read about [Grouping & Aggregation](/search/grouping-aggregation) for result organization

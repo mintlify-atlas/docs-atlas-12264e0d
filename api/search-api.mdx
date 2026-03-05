@@ -1,0 +1,593 @@
+---
+title: Search API
+description: HTTP API for querying and retrieving documents from Vespa
+---
+
+The Search API (`/search/`) provides HTTP access to query Vespa and retrieve documents. It supports the powerful YQL query language, ranking, grouping, and various result presentation formats.
+
+## Base URL
+
+```
+http://<host>:8080/search/
+```
+
+## Quick Start
+
+```bash
+curl "http://localhost:8080/search/?yql=select+*+from+music+where+true"
+```
+
+## Query Methods
+
+The Search API supports both GET and POST methods:
+
+<Tabs>
+  <Tab title="GET">
+    Parameters in URL query string:
+    ```bash
+    curl "http://localhost:8080/search/?yql=select+*+from+music+where+artist+contains+'waits'&hits=10"
+    ```
+  </Tab>
+  <Tab title="POST">
+    Parameters in JSON body:
+    ```bash
+    curl -X POST http://localhost:8080/search/ \
+      -H "Content-Type: application/json" \
+      -d '{
+        "yql": "select * from music where artist contains \"waits\"",
+        "hits": 10
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Core Parameters
+
+### Query
+
+<ParamField query="yql" type="string" required>
+  YQL query string. The primary way to query Vespa.
+  
+  Example: `select * from music where artist contains "waits"`
+</ParamField>
+
+<ParamField query="query" type="string">
+  Simple query string (alternative to YQL for basic queries)
+  
+  Example: `artist:waits`
+</ParamField>
+
+<ParamField query="searchChain" type="string" default="default">
+  Search chain to execute. Use `vespa` for fallback chain.
+</ParamField>
+
+### Result Control
+
+<ParamField query="hits" type="integer" default="10">
+  Number of hits to return (maximum configurable per deployment)
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of hits to skip (for pagination)
+</ParamField>
+
+<ParamField query="timeout" type="string" default="based on query">
+  Query timeout (e.g., `5s`, `500ms`)
+</ParamField>
+
+<ParamField query="format" type="string" default="json">
+  Response format: `json` or `cbor`
+</ParamField>
+
+<ParamField query="presentation.format" type="string" default="json">
+  Legacy parameter for format
+</ParamField>
+
+### Ranking
+
+<ParamField query="ranking.profile" type="string" default="default">
+  Rank profile to use for scoring results
+  
+  Example: `ranking.profile=bm25`
+</ParamField>
+
+<ParamField query="ranking.features.query(tensor)" type="string">
+  Query tensor for ranking
+  
+  Example: `ranking.features.query(embedding)=[1,2,3]`
+</ParamField>
+
+<ParamField query="ranking.softtimeout.enable" type="boolean" default="true">
+  Enable soft timeout (return partial results if timeout is near)
+</ParamField>
+
+<ParamField query="ranking.softtimeout.factor" type="number" default="0.5">
+  Fraction of timeout when soft timeout triggers (0.0-1.0)
+</ParamField>
+
+### Field Filtering
+
+<ParamField query="presentation.summary" type="string" default="default">
+  Document summary class to use (controls which fields are returned)
+</ParamField>
+
+<ParamField query="summary" type="string">
+  Alias for `presentation.summary`
+</ParamField>
+
+### Tracing and Debugging
+
+<ParamField query="tracelevel" type="integer" default="0">
+  Trace level 0-9 for query execution details
+</ParamField>
+
+<ParamField query="trace.timestamps" type="boolean" default="false">
+  Include timestamps in trace output
+</ParamField>
+
+<ParamField query="trace.timingDetails" type="boolean" default="false">
+  Include detailed timing information
+</ParamField>
+
+<ParamField query="explainlevel" type="integer" default="0">
+  Explain level for ranking (0-3)
+</ParamField>
+
+## YQL Queries
+
+YQL (Vespa Query Language) is the primary query language:
+
+### Basic Query
+
+```sql
+select * from music where artist contains "waits"
+```
+
+### Field Selection
+
+```sql
+select artist, title, year from music where artist contains "waits"
+```
+
+### Multiple Conditions
+
+```sql
+select * from music where artist contains "waits" and year > 1980
+```
+
+### Full-Text Search
+
+```sql
+select * from music where userQuery()
+```
+
+<Note>
+`userQuery()` parses the `query` parameter for user-friendly search.
+</Note>
+
+### Ordering
+
+```sql
+select * from music where true order by year desc
+```
+
+### Limiting Results
+
+```sql
+select * from music where true limit 20
+```
+
+### Grouping and Aggregation
+
+```sql
+select * from music where true | 
+all(group(artist) max(5) each(output(count())))
+```
+
+## Response Format
+
+### Successful Response
+
+```json
+{
+  "root": {
+    "id": "toplevel",
+    "relevance": 1.0,
+    "fields": {
+      "totalCount": 100
+    },
+    "coverage": {
+      "coverage": 100,
+      "documents": 1000,
+      "full": true,
+      "nodes": 2,
+      "results": 1,
+      "resultsFull": 1
+    },
+    "children": [
+      {
+        "id": "id:mynamespace:music::1",
+        "relevance": 0.95,
+        "source": "music",
+        "fields": {
+          "artist": "Tom Waits",
+          "title": "Downtown Train",
+          "year": 1985
+        }
+      },
+      {
+        "id": "id:mynamespace:music::2",
+        "relevance": 0.87,
+        "source": "music",
+        "fields": {
+          "artist": "Tom Waits",
+          "title": "Rain Dogs",
+          "year": 1985
+        }
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="root" type="object">
+  Root result object
+</ResponseField>
+
+<ResponseField name="root.fields.totalCount" type="integer">
+  Total number of hits matching the query
+</ResponseField>
+
+<ResponseField name="root.coverage" type="object">
+  Coverage information about the search
+</ResponseField>
+
+<ResponseField name="root.coverage.coverage" type="integer">
+  Percentage of corpus searched (0-100)
+</ResponseField>
+
+<ResponseField name="root.coverage.documents" type="integer">
+  Total documents searched
+</ResponseField>
+
+<ResponseField name="root.coverage.full" type="boolean">
+  Whether full coverage was achieved
+</ResponseField>
+
+<ResponseField name="root.children" type="array">
+  Array of hit documents
+</ResponseField>
+
+<ResponseField name="root.children[].id" type="string">
+  Document ID
+</ResponseField>
+
+<ResponseField name="root.children[].relevance" type="number">
+  Relevance score for this hit
+</ResponseField>
+
+<ResponseField name="root.children[].fields" type="object">
+  Document fields
+</ResponseField>
+
+### Error Response
+
+```json
+{
+  "root": {
+    "id": "toplevel",
+    "relevance": 1.0,
+    "fields": {
+      "totalCount": 0
+    },
+    "errors": [
+      {
+        "code": 4,
+        "summary": "Invalid query parameter",
+        "message": "Could not parse query: Syntax error at position 5"
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="root.errors" type="array">
+  Array of error objects
+</ResponseField>
+
+<ResponseField name="root.errors[].code" type="integer">
+  Error code
+</ResponseField>
+
+<ResponseField name="root.errors[].summary" type="string">
+  Brief error description
+</ResponseField>
+
+<ResponseField name="root.errors[].message" type="string">
+  Detailed error message
+</ResponseField>
+
+## Advanced Features
+
+### Grouping and Aggregation
+
+Group results and compute aggregates:
+
+```bash
+curl "http://localhost:8080/search/?yql=select+*+from+music+where+true+%7C+all(group(artist)+max(5)+each(output(count())))"
+```
+
+Grouping syntax:
+```sql
+select * from music where true | 
+all(group(artist) max(5) each(output(count())))
+```
+
+Common aggregation functions:
+- `count()` - Count documents
+- `sum(field)` - Sum numeric field
+- `avg(field)` - Average of field
+- `max(field)` - Maximum value
+- `min(field)` - Minimum value
+
+### Semantic Search with Embeddings
+
+Query with tensor (embedding) similarity:
+
+```bash
+curl "http://localhost:8080/search/?" \
+  --data-urlencode 'yql=select * from music where {targetHits:10}nearestNeighbor(embedding, query_embedding)' \
+  --data-urlencode 'ranking.features.query(query_embedding)=[0.1, 0.2, 0.3, ...]'
+```
+
+### Faceting
+
+Get facet counts for categorical fields:
+
+```sql
+select * from music where userQuery() | 
+all(group(genre) each(output(count())))
+```
+
+### Pagination
+
+Paginate through results:
+
+```bash
+# Page 1
+curl "http://localhost:8080/search/?yql=select+*+from+music+where+true&hits=10&offset=0"
+
+# Page 2
+curl "http://localhost:8080/search/?yql=select+*+from+music+where+true&hits=10&offset=10"
+
+# Page 3
+curl "http://localhost:8080/search/?yql=select+*+from+music+where+true&hits=10&offset=20"
+```
+
+<Warning>
+Deep pagination (high offset values) can be expensive. Consider using `searchAfter` for better performance.
+</Warning>
+
+### Geographic Search
+
+Query documents near a location:
+
+```bash
+curl "http://localhost:8080/search/?" \
+  --data-urlencode 'yql=select * from restaurant where geoLocation(location, 40.7128, -74.0060, "10km")'
+```
+
+### Highlighting
+
+Highlight matching terms in results:
+
+<ParamField query="bolding" type="boolean" default="true">
+  Enable term highlighting
+</ParamField>
+
+<ParamField query="dynteaser" type="boolean" default="false">
+  Generate dynamic teasers
+</ParamField>
+
+Highlights are wrapped in `<hi>` tags:
+
+```json
+{
+  "fields": {
+    "title": "<hi>Downtown</hi> Train by Tom Waits"
+  }
+}
+```
+
+### Query Profiles
+
+Use predefined query profiles:
+
+<ParamField query="queryProfile" type="string">
+  Query profile name to use
+</ParamField>
+
+```bash
+curl "http://localhost:8080/search/?yql=...&queryProfile=music-search"
+```
+
+### Collapsing (Deduplication)
+
+Collapse similar results:
+
+<ParamField query="collapse.field" type="string">
+  Field to collapse on
+</ParamField>
+
+<ParamField query="collapse.size" type="integer" default="1">
+  Number of hits to keep per collapse value
+</ParamField>
+
+```bash
+curl "http://localhost:8080/search/?yql=...&collapse.field=artist&collapse.size=1"
+```
+
+### Streaming Search
+
+For latency-critical queries with guaranteed freshness:
+
+```bash
+curl "http://localhost:8080/search/?streaming.selection=music.user_id=123&yql=select+*+from+music+where+true"
+```
+
+<ParamField query="streaming.selection" type="string">
+  Selection expression for streaming mode
+</ParamField>
+
+## Performance Optimization
+
+### Result Caching
+
+<ParamField query="nocache" type="boolean" default="false">
+  Disable result cache for this query
+</ParamField>
+
+<ParamField query="nocachewrite" type="boolean" default="false">
+  Don't write results to cache
+</ParamField>
+
+### Timeout Control
+
+```bash
+# Set total timeout
+curl "http://localhost:8080/search/?yql=...&timeout=3s"
+
+# Enable soft timeout for partial results
+curl "http://localhost:8080/search/?yql=...&ranking.softtimeout.enable=true&ranking.softtimeout.factor=0.7"
+```
+
+### Field Sets
+
+Retrieve only necessary fields:
+
+```sql
+select artist, title from music where artist contains "waits"
+```
+
+Or use document summaries:
+
+```bash
+curl "http://localhost:8080/search/?yql=...&summary=minimal"
+```
+
+## HTTP Status Codes
+
+| Status | Description |
+|--------|-------------|
+| 200 OK | Query executed successfully |
+| 400 Bad Request | Invalid query syntax or parameters |
+| 500 Internal Server Error | Server error during query execution |
+| 504 Gateway Timeout | Query exceeded timeout |
+
+<Note>
+Even with errors, the Search API typically returns 200 OK with errors in the JSON response body.
+</Note>
+
+## Examples
+
+<CodeGroup>
+```bash cURL - Basic Search
+curl "http://localhost:8080/search/?" \
+  --data-urlencode 'yql=select * from music where artist contains "waits"' \
+  --data-urlencode 'hits=10'
+```
+
+```bash cURL - Semantic Search
+curl "http://localhost:8080/search/?" \
+  --data-urlencode 'yql=select * from music where {targetHits:10}nearestNeighbor(embedding, q)' \
+  --data-urlencode 'ranking.features.query(q)=[0.1, 0.2, 0.3]' \
+  --data-urlencode 'ranking.profile=semantic'
+```
+
+```python Python
+import requests
+import json
+
+url = "http://localhost:8080/search/"
+
+# Basic search
+response = requests.get(url, params={
+    "yql": 'select * from music where artist contains "waits"',
+    "hits": 10
+})
+
+results = response.json()
+for hit in results["root"]["children"]:
+    print(f"{hit['fields']['artist']} - {hit['fields']['title']}")
+
+# POST with JSON
+query = {
+    "yql": 'select * from music where artist contains "waits"',
+    "hits": 10,
+    "ranking.profile": "bm25"
+}
+
+response = requests.post(url, json=query)
+results = response.json()
+```
+
+```java Java
+import java.net.http.*;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
+HttpClient client = HttpClient.newHttpClient();
+
+String yql = "select * from music where artist contains \"waits\"";
+String encodedYql = URLEncoder.encode(yql, StandardCharsets.UTF_8);
+
+HttpRequest request = HttpRequest.newBuilder()
+    .uri(URI.create("http://localhost:8080/search/?yql=" + encodedYql + "&hits=10"))
+    .GET()
+    .build();
+
+HttpResponse<String> response = client.send(request, 
+    HttpResponse.BodyHandlers.ofString());
+
+System.out.println(response.body());
+```
+
+```javascript JavaScript
+// Using fetch API
+const params = new URLSearchParams({
+  yql: 'select * from music where artist contains "waits"',
+  hits: 10
+});
+
+fetch(`http://localhost:8080/search/?${params}`)
+  .then(response => response.json())
+  .then(data => {
+    data.root.children.forEach(hit => {
+      console.log(`${hit.fields.artist} - ${hit.fields.title}`);
+    });
+  });
+
+// Using POST with JSON
+fetch('http://localhost:8080/search/', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    yql: 'select * from music where artist contains "waits"',
+    hits: 10
+  })
+})
+  .then(response => response.json())
+  .then(data => console.log(data));
+```
+</CodeGroup>
+
+## Related Documentation
+
+- [YQL Reference](/search/query-language)
+- [Ranking](/concepts/ranking)
+- [Grouping](/search/grouping-aggregation)
+- [Ranking Expressions](/search/ranking-expressions)
+- [Document v1 API](/api/document-v1)

@@ -1,0 +1,234 @@
+---
+title: Development Overview
+description: Get started contributing to Vespa with this development environment setup guide
+---
+
+Vespa is a large-scale open-source project with approximately 1.7 million lines of code, split roughly equally between Java and C++. This guide will help you set up your development environment and understand the contribution workflow.
+
+## Prerequisites
+
+Before you begin developing Vespa, you'll need:
+
+- **For Java development**: Java 17 and Maven 3.8+
+- **For C++ development**: AlmaLinux 8 environment (recommended via Docker)
+- **Version control**: Git
+- **Build tools**: CMake (for C++ modules)
+
+## Development Environments
+
+<Tabs>
+  <Tab title="AlmaLinux 8 (Full Development)">
+    C++ and Java building is fully supported on AlmaLinux 8. This is the recommended environment for complete Vespa development.
+
+    The easiest way to set up a complete development environment is using Docker:
+
+    ```bash
+    # Use the official Vespa development Docker image
+    docker pull vespaengine/vespa-dev-almalinux-8
+    ```
+
+    See the [Vespa development on AlmaLinux 8](https://github.com/vespa-engine/docker-image-dev#vespa-development-on-almalinux-8) guide for detailed setup instructions.
+  </Tab>
+
+  <Tab title="macOS (Java Only)">
+    macOS is supported for Java module development. Follow these steps to set up your environment:
+
+    <Steps>
+      <Step title="Install dependencies via Homebrew">
+        ```bash
+        brew install jenv mvnvm openjdk@17
+        ```
+      </Step>
+
+      <Step title="Enable Rosetta 2 (Apple Silicon only)">
+        On ARM Macs (M1, M2, etc.), install Intel compatibility:
+
+        ```bash
+        softwareupdate --install-rosetta
+        ```
+
+        This is required because [gRPC isn't properly maintained for ARM](https://github.com/grpc/grpc-java/issues/7690).
+      </Step>
+
+      <Step title="Symlink JDK for system wrappers">
+        ```bash
+        sudo ln -sfn /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk \
+          /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+        ```
+      </Step>
+
+      <Step title="Configure jEnv (zsh)">
+        ```bash
+        echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.zshrc
+        echo 'eval "$(jenv init -)"' >> ~/.zshrc
+        eval "$(jenv init -)"
+        jenv enable-plugin export
+        exec $SHELL -l
+        ```
+
+        For bash, use `~/.bashrc` instead of `~/.zshrc`.
+      </Step>
+
+      <Step title="Add JDK to jEnv">
+        ```bash
+        jenv add $(/usr/libexec/java_home -v 17)
+        ```
+      </Step>
+
+      <Step title="Verify installation">
+        ```bash
+        mvn -v
+        ```
+
+        Output should refer to JDK 17 and the Maven version specified in `mvnvm.properties`.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Other Platforms">
+    The Java source can be built on any platform with:
+    - Java 17 or later
+    - Maven 3.8 or later
+
+    However, C++ development requires AlmaLinux 8.
+  </Tab>
+</Tabs>
+
+## Repository Structure
+
+The Vespa codebase is organized as a flat structure of approximately 150 modules:
+
+```
+vespa/
+├── bootstrap.sh          # Build initialization script
+├── CMakeLists.txt        # Top-level C++ build configuration
+├── pom.xml              # Top-level Java build configuration
+├── container-*/         # Container (jDisc) modules
+├── searchcore/          # Content node core functionality
+├── searchlib/           # Search and ranking libraries
+├── config*/             # Configuration system modules
+├── vespalib/            # C++ utility library
+├── vespajlib/           # Java utility library
+└── ...
+```
+
+For a detailed guide to the codebase structure, see the [Code Map](/development/code-map).
+
+## Quick Start
+
+To verify your development environment:
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/vespa-engine/vespa.git
+    cd vespa
+    ```
+  </Step>
+
+  <Step title="Build Java modules">
+    ```bash
+    export MAVEN_OPTS="-Xms128m -Xmx1024m"
+    ./bootstrap.sh java
+    mvn install --threads 1C
+    ```
+  </Step>
+
+  <Step title="Run tests">
+    ```bash
+    mvn test
+    ```
+  </Step>
+</Steps>
+
+For detailed building instructions, see [Building Vespa](/development/building).
+
+## Development Workflow
+
+<Note>
+All work on Vespa happens directly on GitHub using the [GitHub flow model](https://docs.github.com/en/get-started/using-github/github-flow).
+</Note>
+
+Vespa follows an open development model:
+
+1. **Master branch is stable**: A new release is made from master every morning CET, Monday through Thursday
+2. **Continuous integration**: All commits are tested at [factory.vespa.ai](https://factory.vespa.ai)
+3. **Pull request reviews**: All PRs must be approved by a [Vespa Committer](https://github.com/orgs/vespa-engine/people)
+4. **Find reviewers**: Check the `OWNERS` file in the relevant source directory
+
+### Creating a Pull Request
+
+<Steps>
+  <Step title="Follow best practices">
+    Follow [Git commit best practices](https://github.com/trein/dev-best-practices/wiki/Git-Commit-Best-Practices) when creating commits.
+  </Step>
+
+  <Step title="Submit your PR">
+    When your code is ready, [submit a pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request) with a clear description of your changes.
+  </Step>
+
+  <Step title="Confirm licensing">
+    All contributions include this confirmation:
+
+    > I confirm that this contribution is made under the terms of the license found in the root directory of this repository's source tree and that I have the authority necessary to make this contribution on behalf of its copyright owner.
+  </Step>
+</Steps>
+
+## API Compatibility
+
+Vespa uses semantic versioning. Important compatibility rules:
+
+- Any Java API in a package with `@PublicAPI` annotation (and no `@Beta` on the class) cannot be changed incompatibly between major versions
+- Existing types and method signatures must be preserved (but can be marked deprecated)
+- ABI compatibility is verified during the Maven build (`mvn install`)
+- If you add to public APIs, update the ABI spec as instructed in the error message
+
+## Testing
+
+Vespa has comprehensive test suites:
+
+- **Unit tests**: Java (JUnit) and C++ (Google Test)
+- **Integration tests**: System-level testing
+- **Shell script tests**: Using [BATS](https://bats-core.readthedocs.io/)
+
+See [Testing](/development/testing) for detailed testing instructions.
+
+## Community and Support
+
+<CardGroup cols={2}>
+  <Card title="Slack Community" icon="slack" href="http://slack.vespa.ai">
+    Join the Vespa Slack for questions, discussions, and support
+  </Card>
+
+  <Card title="GitHub Issues" icon="github" href="https://github.com/vespa-engine/vespa/issues">
+    Report bugs, request features, or browse existing issues
+  </Card>
+
+  <Card title="Stack Overflow" icon="stack-overflow" href="https://stackoverflow.com/questions/tagged/vespa">
+    Search or ask questions tagged with 'vespa'
+  </Card>
+
+  <Card title="Vespa Blog" icon="rss" href="https://blog.vespa.ai">
+    Follow feature updates and use cases
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Vespa" icon="hammer" href="/development/building">
+    Learn how to build Vespa from source
+  </Card>
+
+  <Card title="Code Map" icon="map" href="/development/code-map">
+    Navigate the codebase structure
+  </Card>
+
+  <Card title="Running Tests" icon="flask" href="/development/testing">
+    Run and write tests for Vespa
+  </Card>
+
+  <Card title="Contributing Guide" icon="code-pull-request" href="https://github.com/vespa-engine/vespa/blob/master/CONTRIBUTING.md">
+    Detailed contribution guidelines
+  </Card>
+</CardGroup>

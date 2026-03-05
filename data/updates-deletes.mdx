@@ -1,0 +1,678 @@
+---
+title: Updates and Deletes
+description: Partial updates, conditional updates, field operations, and document deletion in Vespa
+---
+
+## Overview
+
+Vespa supports efficient partial updates without requiring full document replacement. You can:
+
+- Update individual fields
+- Perform arithmetic operations on numeric fields
+- Manipulate arrays and weighted sets
+- Apply conditional updates with test-and-set
+- Delete documents individually or in bulk
+
+## Document Updates
+
+A `DocumentUpdate` specifies one or more field updates to apply atomically:
+
+```java
+import com.yahoo.document.DocumentType;
+import com.yahoo.document.DocumentUpdate;
+import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.document.Field;
+
+DocumentType musicType = docTypeManager.getDocumentType("music");
+DocumentUpdate update = new DocumentUpdate(musicType, 
+    "id:mynamespace:music::song1");
+
+// Add field updates
+FieldUpdate yearUpdate = FieldUpdate.createAssign(
+    musicType.getField("year"), 1975);
+update.addFieldUpdate(yearUpdate);
+```
+
+Reference: `document/src/main/java/com/yahoo/document/DocumentUpdate.java:45`
+
+## Field Updates
+
+Field updates specify operations to perform on individual fields.
+
+### Assign
+
+Set a field to a new value, replacing the existing value:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.document.datatypes.StringFieldValue;
+
+Field titleField = musicType.getField("title");
+FieldUpdate update = FieldUpdate.createAssign(titleField, 
+    new StringFieldValue("Bohemian Rhapsody"));
+docUpdate.addFieldUpdate(update);
+```
+
+```json JSON (HTTP)
+PUT /document/v1/mynamespace/music/docid/song1
+
+{
+  "fields": {
+    "title": {
+      "assign": "Bohemian Rhapsody"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:528-530`
+
+### Clear Field
+
+Completely remove a field value:
+
+<CodeGroup>
+
+```java Java
+FieldUpdate clearUpdate = FieldUpdate.createClearField(
+    musicType.getField("description"));
+docUpdate.addFieldUpdate(clearUpdate);
+```
+
+```json JSON (HTTP)
+{
+  "fields": {
+    "description": {
+      "assign": null
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:331-333`
+
+### Arithmetic Operations
+
+Perform arithmetic on numeric fields:
+
+<CodeGroup>
+
+```java Increment
+FieldUpdate incUpdate = FieldUpdate.createIncrement(
+    musicType.getField("play_count"), 1);
+docUpdate.addFieldUpdate(incUpdate);
+```
+
+```java Decrement
+FieldUpdate decUpdate = FieldUpdate.createDecrement(
+    musicType.getField("stock"), 5);
+docUpdate.addFieldUpdate(decUpdate);
+```
+
+```java Multiply
+FieldUpdate mulUpdate = FieldUpdate.createMultiply(
+    musicType.getField("price"), 1.1);
+docUpdate.addFieldUpdate(mulUpdate);
+```
+
+```java Divide
+FieldUpdate divUpdate = FieldUpdate.createDivide(
+    musicType.getField("total"), 2);
+docUpdate.addFieldUpdate(divUpdate);
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:411-515`
+
+### Arithmetic on Weighted Sets
+
+Perform arithmetic on weights in weighted sets:
+
+```java
+import com.yahoo.document.datatypes.StringFieldValue;
+
+// Increment weight for a specific key
+Field tagsField = musicType.getField("tags");
+StringFieldValue tag = new StringFieldValue("rock");
+FieldUpdate update = FieldUpdate.createIncrement(tagsField, tag, 10);
+docUpdate.addFieldUpdate(update);
+```
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:426-428`
+
+## Array Operations
+
+Manipulate array fields:
+
+### Add Elements
+
+Add single or multiple elements to an array:
+
+<CodeGroup>
+
+```java Single Element
+import com.yahoo.document.datatypes.StringFieldValue;
+
+Field categoriesField = musicType.getField("categories");
+FieldUpdate addUpdate = FieldUpdate.createAdd(
+    categoriesField,
+    new StringFieldValue("rock")
+);
+docUpdate.addFieldUpdate(addUpdate);
+```
+
+```java Multiple Elements
+import java.util.List;
+
+List<StringFieldValue> values = List.of(
+    new StringFieldValue("rock"),
+    new StringFieldValue("classic")
+);
+FieldUpdate addAllUpdate = FieldUpdate.createAddAll(
+    categoriesField, values);
+docUpdate.addFieldUpdate(addAllUpdate);
+```
+
+```json JSON (HTTP)
+{
+  "fields": {
+    "categories": {
+      "add": [
+        "rock",
+        "classic"
+      ]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:346-382`
+
+### Remove Elements
+
+Remove elements from an array:
+
+<CodeGroup>
+
+```java Java
+FieldUpdate removeUpdate = FieldUpdate.createRemove(
+    categoriesField,
+    new StringFieldValue("pop")
+);
+docUpdate.addFieldUpdate(removeUpdate);
+```
+
+```json JSON (HTTP)
+{
+  "fields": {
+    "categories": {
+      "remove": ["pop"]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:581-583`
+
+### Modify Array Element
+
+Update a specific array element by index:
+
+```java
+import com.yahoo.document.datatypes.IntegerFieldValue;
+import com.yahoo.document.update.ValueUpdate;
+
+// Update element at index 2
+FieldUpdate mapUpdate = FieldUpdate.createMap(
+    categoriesField,
+    new IntegerFieldValue(2),  // Array index
+    ValueUpdate.createAssign(new StringFieldValue("jazz"))
+);
+docUpdate.addFieldUpdate(mapUpdate);
+```
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:566-568`
+
+## Weighted Set Operations
+
+Manipulate weighted sets with key-weight pairs:
+
+### Add to Weighted Set
+
+<CodeGroup>
+
+```java Single Key
+import com.yahoo.document.datatypes.StringFieldValue;
+
+Field tagsField = musicType.getField("tags");
+FieldUpdate addUpdate = FieldUpdate.createAdd(
+    tagsField,
+    new StringFieldValue("rock"),
+    100  // Weight
+);
+docUpdate.addFieldUpdate(addUpdate);
+```
+
+```java Multiple Keys
+import com.yahoo.document.datatypes.WeightedSet;
+
+WeightedSet<StringFieldValue> tags = new WeightedSet<>(
+    DataType.getWeightedSet(DataType.STRING));
+tags.put(new StringFieldValue("rock"), 100);
+tags.put(new StringFieldValue("classic"), 80);
+
+FieldUpdate addAllUpdate = FieldUpdate.createAddAll(tagsField, tags);
+docUpdate.addFieldUpdate(addAllUpdate);
+```
+
+```json JSON (HTTP)
+{
+  "fields": {
+    "tags": {
+      "add": {
+        "rock": 100,
+        "classic": 80
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:363-399`
+
+### Modify Weights
+
+Update the weight of existing keys:
+
+```java
+// Increment weight for "rock" by 10
+FieldUpdate incWeight = FieldUpdate.createIncrement(
+    tagsField,
+    new StringFieldValue("rock"),
+    10
+);
+docUpdate.addFieldUpdate(incWeight);
+```
+
+## Conditional Updates
+
+Apply updates only when a condition is met using test-and-set:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.DocumentUpdate;
+import com.yahoo.document.select.parser.ParseException;
+
+DocumentUpdate update = new DocumentUpdate(musicType, 
+    "id:mynamespace:music::song1");
+
+// Set condition
+update.setCondition(new TestAndSetCondition("music.year > 1970"));
+
+// Add field updates
+FieldUpdate yearUpdate = FieldUpdate.createAssign(
+    musicType.getField("year"), 1975);
+update.addFieldUpdate(yearUpdate);
+
+// Update will only apply if condition matches
+session.update(update);
+```
+
+```json JSON (HTTP)
+PUT /document/v1/mynamespace/music/docid/song1?condition=music.year>1970
+
+{
+  "fields": {
+    "year": {
+      "assign": 1975
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+### Condition Syntax
+
+Test-and-set conditions use document selection syntax:
+
+```java
+// Numeric comparison
+update.setCondition(new TestAndSetCondition("music.year >= 1970"));
+
+// String comparison
+update.setCondition(new TestAndSetCondition("music.artist == 'Queen'"));
+
+// Field existence
+update.setCondition(new TestAndSetCondition("music.album != null"));
+
+// Logical operators
+update.setCondition(new TestAndSetCondition(
+    "music.year > 1970 AND music.genre == 'rock'"));
+```
+
+<Warning>
+If the condition evaluates to false, the update is rejected with a "condition not met" error.
+</Warning>
+
+## Create If Non-Existent
+
+Create a document if it doesn't exist:
+
+<CodeGroup>
+
+```java Java
+DocumentUpdate update = new DocumentUpdate(musicType,
+    "id:mynamespace:music::song1");
+
+// Enable create-if-non-existent
+update.setCreateIfNonExistent(true);
+
+// Add field updates
+FieldUpdate titleUpdate = FieldUpdate.createAssign(
+    musicType.getField("title"),
+    new StringFieldValue("New Song")
+);
+update.addFieldUpdate(titleUpdate);
+
+session.update(update);
+```
+
+```json JSON (HTTP)
+PUT /document/v1/mynamespace/music/docid/song1?create=true
+
+{
+  "fields": {
+    "title": {
+      "assign": "New Song"
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Reference: `document/src/main/java/com/yahoo/document/DocumentUpdate.java:423-425`
+
+<Note>
+When create-if-non-existent is true, Vespa creates an empty document before applying the update if the document doesn't exist.
+</Note>
+
+## Multiple Field Updates
+
+Update multiple fields in a single operation:
+
+```java
+DocumentUpdate update = new DocumentUpdate(musicType,
+    "id:mynamespace:music::song1");
+
+// Update multiple fields
+update.addFieldUpdate(FieldUpdate.createAssign(
+    musicType.getField("title"),
+    new StringFieldValue("Bohemian Rhapsody")
+));
+
+update.addFieldUpdate(FieldUpdate.createAssign(
+    musicType.getField("year"),
+    new IntegerFieldValue(1975)
+));
+
+update.addFieldUpdate(FieldUpdate.createIncrement(
+    musicType.getField("play_count"), 1
+));
+
+session.update(update);
+```
+
+Reference: `document/src/main/java/com/yahoo/document/DocumentUpdate.java:276-290`
+
+<Note>
+All field updates in a DocumentUpdate are applied atomically. Either all succeed or all fail.
+</Note>
+
+## Multiple Value Updates per Field
+
+Apply multiple operations to the same field:
+
+```java
+import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.document.update.ValueUpdate;
+
+FieldUpdate fieldUpdate = FieldUpdate.create(musicType.getField("tags"));
+
+// Add multiple value updates
+fieldUpdate.addValueUpdate(ValueUpdate.createAdd(
+    new StringFieldValue("rock"), 100));
+    
+fieldUpdate.addValueUpdate(ValueUpdate.createAdd(
+    new StringFieldValue("classic"), 80));
+    
+fieldUpdate.addValueUpdate(ValueUpdate.createRemove(
+    new StringFieldValue("pop")));
+
+docUpdate.addFieldUpdate(fieldUpdate);
+```
+
+Reference: `document/src/main/java/com/yahoo/document/update/FieldUpdate.java:137-141`
+
+## Document Removal
+
+Delete documents from Vespa:
+
+### Remove by ID
+
+<CodeGroup>
+
+```java Java - AsyncSession
+import com.yahoo.document.DocumentId;
+
+DocumentId id = new DocumentId("id:mynamespace:music::song1");
+Result result = session.remove(id);
+
+if (result.isSuccess()) {
+    System.out.println("Document removed");
+}
+```
+
+```java Java - Feed Client
+import ai.vespa.feed.client.DocumentId;
+import ai.vespa.feed.client.OperationParameters;
+
+DocumentId id = DocumentId.of("mynamespace", "music", "song1");
+CompletableFuture<Result> promise = client.remove(
+    id,
+    OperationParameters.empty()
+);
+```
+
+```bash HTTP
+DELETE /document/v1/mynamespace/music/docid/song1
+```
+
+</CodeGroup>
+
+### Conditional Remove
+
+Remove only if a condition is met:
+
+<CodeGroup>
+
+```java Java
+import com.yahoo.document.DocumentRemove;
+
+DocumentRemove remove = new DocumentRemove(
+    new DocumentId("id:mynamespace:music::song1"));
+remove.setCondition(new TestAndSetCondition("music.year < 1970"));
+
+DocumentOperationParameters params = parameters();
+Result result = session.remove(remove, params);
+```
+
+```bash HTTP
+DELETE /document/v1/mynamespace/music/docid/song1?condition=music.year<1970
+```
+
+</CodeGroup>
+
+### Bulk Remove
+
+Remove multiple documents matching a selection:
+
+```bash
+# Remove all music documents from the 1960s
+curl -X DELETE \
+  'http://localhost:8080/document/v1/mynamespace/music/docid?selection=music.year<1970&cluster=music'
+```
+
+## Applying Updates to Documents
+
+You can apply updates to in-memory documents:
+
+```java
+import com.yahoo.document.Document;
+import com.yahoo.document.DocumentUpdate;
+
+// Load document
+Document doc = session.get(new DocumentId("id:mynamespace:music::song1"));
+
+// Create update
+DocumentUpdate update = new DocumentUpdate(musicType, doc.getId());
+update.addFieldUpdate(FieldUpdate.createAssign(
+    musicType.getField("year"), 1975));
+
+// Apply update to document
+update.applyTo(doc);
+
+// Document now has updated field
+System.out.println("Year: " + doc.getFieldValue("year"));
+```
+
+Reference: `document/src/main/java/com/yahoo/document/DocumentUpdate.java:125-135`
+
+## Pruning Updates
+
+Remove no-op updates before sending:
+
+```java
+DocumentUpdate update = new DocumentUpdate(musicType, doc.getId());
+update.addFieldUpdate(FieldUpdate.createAssign(
+    musicType.getField("year"), 1975));
+
+// Prune updates that won't change the document
+Document currentDoc = session.get(doc.getId());
+update.prune(currentDoc);
+
+if (!update.isEmpty()) {
+    session.update(update);
+} else {
+    System.out.println("No changes needed");
+}
+```
+
+Reference: `document/src/main/java/com/yahoo/document/DocumentUpdate.java:143-171`
+
+## Error Handling
+
+Handle update failures:
+
+```java
+import com.yahoo.documentapi.DocumentUpdateResponse;
+
+responseHandler.handleResponse(response -> {
+    if (response instanceof DocumentUpdateResponse) {
+        DocumentUpdateResponse updateResp = (DocumentUpdateResponse) response;
+        
+        if (!updateResp.isSuccess()) {
+            if (updateResp.wasFound()) {
+                // Document exists but condition failed
+                System.err.println("Condition not met");
+            } else {
+                // Document not found
+                System.err.println("Document does not exist");
+            }
+        }
+    }
+});
+```
+
+## Best Practices
+
+<Steps>
+
+### Use Partial Updates Over Full Puts
+
+Partial updates are more efficient than fetching and re-putting entire documents:
+
+```java
+// Good: Partial update
+update.addFieldUpdate(FieldUpdate.createIncrement(
+    musicType.getField("play_count"), 1));
+
+// Avoid: Fetch + modify + put
+// Document doc = session.get(id);
+// doc.setFieldValue("play_count", playCount + 1);
+// session.put(doc);
+```
+
+### Batch Related Updates
+
+Combine multiple field updates into a single DocumentUpdate:
+
+```java
+// Good: Single update with multiple fields
+update.addFieldUpdate(yearUpdate);
+update.addFieldUpdate(titleUpdate);
+update.addFieldUpdate(artistUpdate);
+session.update(update);
+
+// Avoid: Multiple separate updates
+// session.update(yearUpdate);
+// session.update(titleUpdate);
+// session.update(artistUpdate);
+```
+
+### Use Arithmetic Operations
+
+Leverage built-in arithmetic instead of read-modify-write:
+
+```java
+// Good: Atomic increment
+FieldUpdate.createIncrement(field, 1);
+
+// Avoid: Read-modify-write
+// int current = (int) doc.getFieldValue("count");
+// doc.setFieldValue("count", current + 1);
+```
+
+### Set Appropriate Conditions
+
+Use test-and-set to prevent race conditions:
+
+```java
+// Ensure year is not already set
+update.setCondition(new TestAndSetCondition("music.year == null"));
+update.addFieldUpdate(FieldUpdate.createAssign(
+    musicType.getField("year"), 1975));
+```
+
+</Steps>
+
+## See Also
+
+- [Document API](/data/document-api) - Complete document operation reference
+- [Feeding Data](/data/feeding-data) - How to feed documents to Vespa
+- [Indexing](/data/indexing) - Document processing pipeline

@@ -1,0 +1,416 @@
+---
+title: Code Map
+description: Navigate the Vespa codebase structure and understand its functional organization
+---
+
+Vespa consists of approximately 1.7 million lines of code, split equally between Java and C++. This guide maps the functional elements of Vespa to the most important modules in the flat structure of about 150 modules.
+
+<Note>
+The code is written by a team selected for their ability to do this work unusually well, with time to dedicate to it long-term. While the code is mostly easy to work with, the module structure wasn't designed to be newcomer-friendly - it's simply organized in a flat structure.
+</Note>
+
+## Architecture Overview
+
+Vespa's architecture consists of three major subsystems:
+
+<CardGroup cols={3}>
+  <Card title="Stateless Container" icon="box">
+    Request handling, query processing, and document operations (Java)
+  </Card>
+
+  <Card title="Content Nodes" icon="database">
+    Data storage, indexing, matching, and ranking (C++)
+  </Card>
+
+  <Card title="Configuration" icon="gear">
+    Application deployment, configuration management, and administration (Java)
+  </Card>
+</CardGroup>
+
+![Code Map](https://github.com/vespa-engine/vespa/raw/master/Code-map.png)
+
+## The Stateless Container
+
+When a request enters Vespa, it first goes through a stateless container cluster called **jDisc**. The container is implemented entirely in Java and consists of multiple layers:
+
+### jDisc Core
+
+Provides the foundation for request-response handling:
+
+<Card title="jdisc_core" icon="layer-group" href="https://github.com/vespa-engine/vespa/tree/master/jdisc_core">
+  Core jDisc functionality providing:
+  - Application model for running services
+  - Protocol-independent request-response handling
+  - Various protocol implementations
+  - Network I/O abstraction
+</Card>
+
+### jDisc Container
+
+Layered on jDisc core, providing component infrastructure:
+
+<CardGroup cols={2}>
+  <Card title="container-disc" icon="container-storage" href="https://github.com/vespa-engine/vespa/tree/master/container-disc">
+    Core container functionality:
+    - Metrics collection
+    - OSGi integration for component bundles
+    - Dependency injection
+    - HTTP connector
+    - Integration between container and core layers
+  </Card>
+
+  <Card title="component" icon="puzzle-piece" href="https://github.com/vespa-engine/vespa/tree/master/component">
+    The component model - Java components implement or subclass types from this module
+  </Card>
+</CardGroup>
+
+### Search Container
+
+Layered on jDisc container for query processing:
+
+<Card title="container-search" icon="magnifying-glass" href="https://github.com/vespa-engine/vespa/tree/master/container-search">
+  Query processing framework including:
+  - Query-Result processing (Searchers)
+  - Generic processing framework
+  - Query profiles
+  - Global query execution logic
+  - Dispatch (scatter-gather)
+  - Grouping and aggregation
+</Card>
+
+### Document Operation Modules
+
+Handling document writes and updates:
+
+<AccordionGroup>
+  <Accordion title="document">
+    **Location**: [vespa/document](https://github.com/vespa-engine/vespa/tree/master/document)
+
+    The document model implemented in both Java and C++:
+    - Documents, fields, and document types
+    - Operations on documents (put, update, remove)
+    - Document serialization
+  </Accordion>
+
+  <Accordion title="messagebus">
+    **Location**: [vespa/messagebus](https://github.com/vespa-engine/vespa/tree/master/messagebus)
+
+    Generic async, multi-hop message passing:
+    - Implemented in both Java and C++
+    - Reliable message routing
+    - Load balancing across nodes
+    - Throttling and flow control
+  </Accordion>
+
+  <Accordion title="documentapi">
+    **Location**: [vespa/documentapi](https://github.com/vespa-engine/vespa/tree/master/documentapi)
+
+    API for issuing document operations to Vespa over messagebus:
+    - Document put, update, remove operations
+    - Visiting (bulk read) API
+    - Batch operations
+  </Accordion>
+
+  <Accordion title="docproc">
+    **Location**: [vespa/docproc](https://github.com/vespa-engine/vespa/tree/master/docproc)
+
+    Chainable document processors:
+    - Process documents before indexing
+    - Transform, enrich, or validate documents
+    - Custom document processing logic
+  </Accordion>
+
+  <Accordion title="indexinglanguage">
+    **Location**: [vespa/indexinglanguage](https://github.com/vespa-engine/vespa/tree/master/indexinglanguage)
+
+    Implementation of the "indexing" language:
+    - Expressions used in schema `indexing:` statements
+    - Field transformations
+    - Derived field computation
+  </Accordion>
+
+  <Accordion title="docprocs">
+    **Location**: [vespa/docprocs](https://github.com/vespa-engine/vespa/tree/master/docprocs)
+
+    Document processor components bundled with Vespa:
+    - **IndexingProcessor** - Executes indexing language statements
+    - Standard document transformations
+  </Accordion>
+
+  <Accordion title="vespaclient-container-plugin">
+    **Location**: [vespa/vespaclient-container-plugin](https://github.com/vespa-engine/vespa/tree/master/vespaclient-container-plugin)
+
+    Implements HTTP APIs for document operations:
+    - `/document/v1/` REST API
+    - Internal API used by Java HTTP client
+    - Forwards to Document API
+  </Accordion>
+
+  <Accordion title="vespa-feed-client">
+    **Location**: [vespa/vespa-feed-client](https://github.com/vespa-engine/vespa/tree/master/vespa-feed-client)
+
+    High-performance client for writing documents:
+    - Async, pipelined writes
+    - Automatic retries and throttling
+    - Uses internal API for optimal performance
+  </Accordion>
+</AccordionGroup>
+
+## Content Nodes
+
+Content nodes store all data, maintain indexes, and perform distributed query execution. This subsystem is written in **C++** for maximum performance.
+
+### Core Content Components
+
+<AccordionGroup>
+  <Accordion title="searchcore">
+    **Location**: [vespa/searchcore](https://github.com/vespa-engine/vespa/tree/master/searchcore)
+
+    Core functionality for content nodes:
+    - **Proton** - The content node server itself
+    - Index maintenance (real-time indexing)
+    - Matching (document selection)
+    - Data storage and retrieval
+    - Grouping and aggregation
+    - Document-level operations
+  </Accordion>
+
+  <Accordion title="searchlib">
+    **Location**: [vespa/searchlib](https://github.com/vespa-engine/vespa/tree/master/searchlib)
+
+    Libraries invoked by searchcore:
+
+    **Ranking:**
+    - Feature execution framework (fef)
+    - Rank feature implementations
+    - Ranking expression evaluation
+
+    **Indexing:**
+    - Index implementations
+    - B-tree structures
+    - Attributes (forward indexes)
+
+    **Java components:**
+    - Java ranking libraries
+    - Query tree representations
+  </Accordion>
+
+  <Accordion title="storage">
+    **Location**: [vespa/storage](https://github.com/vespa-engine/vespa/tree/master/storage/src/vespa/storage)
+
+    Elastic, auto-recovering data storage:
+    - Distribution across cluster nodes
+    - Bucket management
+    - Replica maintenance
+    - Consistency guarantees
+    - Garbage collection
+  </Accordion>
+
+  <Accordion title="eval">
+    **Location**: [vespa/eval](https://github.com/vespa-engine/vespa/tree/master/eval)
+
+    Efficient evaluation of ranking expressions:
+    - Tensor API and implementation
+    - Expression optimization
+    - ONNX model integration
+    - SIMD and GPU acceleration
+  </Accordion>
+
+  <Accordion title="storageapi">
+    **Location**: [vespa/storageapi](https://github.com/vespa-engine/vespa/tree/master/storage/src/vespa/storageapi)
+
+    MessageBus messages for storage:
+    - Document API protocol implementation
+    - Storage operation messages
+    - Internal storage communication
+  </Accordion>
+
+  <Accordion title="clustercontroller-core">
+    **Location**: [vespa/clustercontroller-core](https://github.com/vespa-engine/vespa/tree/master/clustercontroller-core)
+
+    Cluster controller for storage (Java):
+    - Node-level decision-making
+    - State management via ZooKeeper
+    - Cluster health monitoring
+    - Automatic failover
+  </Accordion>
+</AccordionGroup>
+
+## Configuration and Administration
+
+The third major subsystem manages configuration, clusters, and application deployment. Implemented in **Java**.
+
+### Configuration System
+
+<AccordionGroup>
+  <Accordion title="configserver">
+    **Location**: [vespa/configserver](https://github.com/vespa-engine/vespa/tree/master/configserver)
+
+    The server where applications are deployed:
+    - Application package deployment
+    - Configuration generation
+    - Serving config to nodes
+    - Application lifecycle management
+  </Accordion>
+
+  <Accordion title="config-model">
+    **Location**: [vespa/config-model](https://github.com/vespa-engine/vespa/tree/master/config-model)
+
+    Model of the running system:
+    - Derives configuration from application package
+    - Returns config instances by type and id
+    - Validates application structure
+    - Manages service topology
+  </Accordion>
+
+  <Accordion title="config">
+    **Location**: [vespa/config](https://github.com/vespa-engine/vespa/tree/master/config)
+
+    Client-side configuration library (Java and C++):
+    - Subscribing to configs by type and id
+    - Reading config payloads
+    - Automatic config updates
+    - Config caching
+  </Accordion>
+
+  <Accordion title="configgen">
+    **Location**: [vespa/configgen](https://github.com/vespa-engine/vespa/tree/master/configgen)
+
+    Code generation for configs:
+    - Generates C++ config classes
+    - Generates Java config classes
+    - Type-safe config reading and building
+  </Accordion>
+
+  <Accordion title="config-proxy">
+    **Location**: [vespa/config-proxy](https://github.com/vespa-engine/vespa/tree/master/config-proxy)
+
+    Node-local config proxy:
+    - Caches configs on each node
+    - Reduces config server load
+    - Provides config during restarts
+  </Accordion>
+
+  <Accordion title="configdefinitions">
+    **Location**: [vespa/configdefinitions](https://github.com/vespa-engine/vespa/tree/master/configdefinitions)
+
+    Shared config type definitions:
+    - Config `.def` files
+    - Referenced by multiple modules
+    - System-wide configuration schemas
+  </Accordion>
+</AccordionGroup>
+
+## General Utility Libraries
+
+Libraries used throughout the Vespa codebase:
+
+<CardGroup cols={2}>
+  <Card title="vespalib" icon="toolbox" href="https://github.com/vespa-engine/vespa/tree/master/vespalib">
+    General utility library for C++:
+    - Data structures (hash maps, arrays)
+    - Threading and synchronization
+    - Memory management
+    - String utilities
+    - Network utilities
+  </Card>
+
+  <Card title="vespajlib" icon="toolbox" href="https://github.com/vespa-engine/vespa/tree/master/vespajlib">
+    General utility library for Java:
+    - Collections and data structures
+    - Java tensor implementation
+    - Text processing
+    - Utilities and helpers
+  </Card>
+</CardGroup>
+
+## Finding Your Way
+
+When working with the Vespa codebase:
+
+<Steps>
+  <Step title="Identify the functional area">
+    Determine which subsystem your change affects:
+    - **Query processing** → Container modules
+    - **Indexing/ranking** → Content node modules  
+    - **Configuration/deployment** → Config system
+  </Step>
+
+  <Step title="Find the relevant module">
+    Use this code map to identify the specific module:
+    - Module names usually indicate their purpose
+    - Check module README files for details
+    - Look at `OWNERS` files for experts
+  </Step>
+
+  <Step title="Explore the module structure">
+    Within each module:
+    - `src/main/` or `src/vespa/` - Production code
+    - `src/test/` or `src/tests/` - Test code
+    - `README.md` - Module documentation
+    - `CMakeLists.txt` or `pom.xml` - Build configuration
+  </Step>
+</Steps>
+
+## Module Categories
+
+Modules follow naming patterns:
+
+| Pattern | Purpose | Examples |
+|---------|---------|----------|
+| `container-*` | Container components | `container-search`, `container-disc` |
+| `config*` | Configuration system | `configserver`, `config-model` |
+| `search*` | Search and ranking | `searchcore`, `searchlib` |
+| `*-plugin` | Build plugins | `bundle-plugin`, `config-class-plugin` |
+| `vespa*` | Core utilities | `vespalib`, `vespajlib` |
+| `jdisc*` | jDisc framework | `jdisc_core`, `jdisc_http_service` |
+
+## Additional Resources
+
+<CardGroup cols={2}>
+  <Card title="TODO List" icon="list-check" href="https://github.com/vespa-engine/vespa/blob/master/TODO.md">
+    Larger features nobody is working on yet
+  </Card>
+
+  <Card title="Module READMEs" icon="book">
+    Each module has detailed documentation in its README.md file
+  </Card>
+
+  <Card title="OWNERS Files" icon="users">
+    Find subject matter experts for code areas
+  </Card>
+
+  <Card title="Code Search" icon="magnifying-glass" href="https://github.com/vespa-engine/vespa">
+    Search the codebase on GitHub
+  </Card>
+</CardGroup>
+
+## Not Covered Here
+
+This map focuses on modules you're most likely to encounter as a developer. Other modules are either:
+
+- Small and self-explanatory
+- Implementing specific technical requirements
+- Part of the Vespa Cloud service (not expected to be modified externally)
+
+For a complete list, browse the [Vespa repository](https://github.com/vespa-engine/vespa).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Building Vespa" icon="hammer" href="/development/building">
+    Build the modules you want to work on
+  </Card>
+
+  <Card title="Running Tests" icon="flask" href="/development/testing">
+    Test your changes
+  </Card>
+
+  <Card title="Development Overview" icon="code" href="/development/overview">
+    Return to development overview
+  </Card>
+
+  <Card title="Contributing" icon="code-pull-request" href="https://github.com/vespa-engine/vespa/blob/master/CONTRIBUTING.md">
+    Learn the contribution process
+  </Card>
+</CardGroup>

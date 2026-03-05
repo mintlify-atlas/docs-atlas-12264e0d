@@ -1,0 +1,365 @@
+---
+title: Monitoring
+description: Monitor Vespa performance and health with metrics, endpoints, and observability tools
+---
+
+Vespa provides comprehensive monitoring capabilities to track system health, performance, and resource utilization across all components.
+
+## Metrics Overview
+
+Vespa exposes metrics at multiple levels of the system, from container nodes to content nodes to storage components.
+
+### Available Metrics Endpoints
+
+<CodeGroup>
+```bash Application Metrics
+# Get metrics for all nodes in the application
+curl http://localhost:19092/applicationmetrics/v1/values
+
+# Get Prometheus-format metrics
+curl http://localhost:19092/applicationmetrics/v1/prometheus
+```
+
+```bash Node Metrics
+# Get metrics from a specific node
+curl http://localhost:19090/metrics/v2/values
+
+# Get metrics for specific consumer
+curl http://localhost:19090/metrics/v2/values?consumer=Vespa
+```
+
+```bash State API
+# Check node health status
+curl http://localhost:19050/state/v1/health
+
+# Get detailed metrics
+curl http://localhost:19050/state/v1/metrics
+```
+</CodeGroup>
+
+## Container Metrics
+
+Container nodes expose metrics for query processing, document operations, and JVM performance.
+
+### Key Container Metrics
+
+<Accordion title="HTTP and Request Metrics">
+```java
+// HTTP status code metrics (from ContainerMetrics.java)
+HTTP_STATUS_2XX     // Number of successful responses
+HTTP_STATUS_4XX     // Client errors
+HTTP_STATUS_5XX     // Server errors
+
+// Request handling
+HANDLED_REQUESTS    // Number of requests handled per snapshot
+HANDLED_LATENCY     // Request handling latency (ms)
+
+// Query metrics
+QUERIES             // Query volume
+QUERY_LATENCY       // Overall query latency (ms)
+QUERY_CONTAINER_LATENCY  // Query execution time in container
+FAILED_QUERIES      // Number of failed queries
+DEGRADED_QUERIES    // Queries with partial results
+```
+
+**Monitoring Example:**
+```bash
+# Check query performance
+curl http://localhost:19092/metrics/v2/values | jq '.nodes[].metrics[] | select(.values."query_latency.average")'
+```
+</Accordion>
+
+<Accordion title="JVM and Memory Metrics">
+```java
+// Garbage collection (from ContainerMetrics.java)
+JDISC_GC_COUNT         // Number of GC runs
+JDISC_GC_MS            // Time spent in GC (ms)
+
+// Memory usage
+MEM_HEAP_TOTAL         // Total heap memory
+MEM_HEAP_USED          // Used heap memory
+MEM_HEAP_FREE          // Free heap memory
+MEM_DIRECT_USED        // Direct memory usage
+
+// Thread pool metrics
+JDISC_THREAD_POOL_SIZE              // Thread pool size
+JDISC_THREAD_POOL_ACTIVE_THREADS    // Active threads
+JDISC_THREAD_POOL_WORK_QUEUE_SIZE   // Queued tasks
+JDISC_THREAD_POOL_REJECTED_TASKS    // Rejected tasks
+```
+
+<Warning>
+High `JDISC_THREAD_POOL_REJECTED_TASKS` indicates thread pool saturation. Consider increasing thread pool size or optimizing request handlers.
+</Warning>
+</Accordion>
+
+<Accordion title="Document API Metrics">
+```java
+// Document operations (from ContainerMetrics.java)
+HTTPAPI_NUM_OPERATIONS   // Total document operations
+HTTPAPI_NUM_PUTS         // Put operations
+HTTPAPI_NUM_UPDATES      // Update operations
+HTTPAPI_NUM_REMOVES      // Remove operations
+HTTPAPI_LATENCY          // Operation latency
+
+// Operation results
+HTTPAPI_SUCCEEDED        // Successful operations
+HTTPAPI_FAILED           // Failed operations
+HTTPAPI_FAILED_TIMEOUT   // Timeout failures
+HTTPAPI_NOT_FOUND        // Document not found
+
+// Queue metrics
+HTTPAPI_PENDING          // Operations pending
+HTTPAPI_QUEUED_OPERATIONS // Queued operations
+HTTPAPI_QUEUED_AGE       // Age of oldest queued operation
+```
+</Accordion>
+
+## Content Node Metrics
+
+Content nodes (search nodes) expose detailed metrics about document processing, indexing, and search operations.
+
+### Document Database Metrics
+
+```java
+// Document counts (from SearchNodeMetrics.java)
+CONTENT_PROTON_DOCUMENTDB_DOCUMENTS_TOTAL   // Total documents
+CONTENT_PROTON_DOCUMENTDB_DOCUMENTS_READY   // Ready documents
+CONTENT_PROTON_DOCUMENTDB_DOCUMENTS_ACTIVE  // Active/searchable documents
+CONTENT_PROTON_DOCUMENTDB_DOCUMENTS_REMOVED // Removed documents
+
+// Resource usage
+CONTENT_PROTON_DOCUMENTDB_DISK_USAGE                    // Disk usage (bytes)
+CONTENT_PROTON_DOCUMENTDB_MEMORY_USAGE_ALLOCATED_BYTES  // Allocated memory
+CONTENT_PROTON_DOCUMENTDB_MEMORY_USAGE_USED_BYTES       // Used memory
+
+// Index metrics
+CONTENT_PROTON_DOCUMENTDB_INDEX_DOCS_IN_MEMORY  // Docs in memory index
+CONTENT_PROTON_DOCUMENTDB_INDEX_DISK_USAGE      // Index disk usage
+```
+
+### Query Execution Metrics
+
+<Steps>
+  <Step title="Monitor Query Performance">
+    Track query latency and throughput:
+    ```java
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_QUERIES        // Query count
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_QUERY_LATENCY  // Query latency (sec)
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_DOCS_MATCHED   // Documents matched
+    CONTENT_PROTON_DOCUMENTDB_MATCHING_DOCS_RANKED    // Documents ranked
+    ```
+  </Step>
+  
+  <Step title="Check Document Summary Latency">
+    ```java
+    CONTENT_PROTON_DOCSUM_LATENCY  // Document summary latency
+    CONTENT_PROTON_DOCSUM_COUNT    // Summary requests
+    CONTENT_PROTON_DOCSUM_DOCS     // Documents returned
+    ```
+  </Step>
+  
+  <Step title="Monitor Resource Limits">
+    ```java
+    CONTENT_PROTON_RESOURCE_USAGE_DISK            // Disk utilization (0-1)
+    CONTENT_PROTON_RESOURCE_USAGE_MEMORY          // Memory utilization (0-1)
+    CONTENT_PROTON_RESOURCE_USAGE_FEEDING_BLOCKED // Feeding blocked (0 or 1)
+    ```
+  </Step>
+</Steps>
+
+### Executor Metrics
+
+```java
+// Shared executors (from SearchNodeMetrics.java)
+CONTENT_PROTON_EXECUTOR_PROTON_QUEUESIZE     // Proton queue size
+CONTENT_PROTON_EXECUTOR_PROTON_UTILIZATION   // Worker thread utilization
+CONTENT_PROTON_EXECUTOR_MATCH_QUEUESIZE      // Match executor queue
+CONTENT_PROTON_EXECUTOR_MATCH_UTILIZATION    // Match thread utilization
+CONTENT_PROTON_EXECUTOR_DOCSUM_QUEUESIZE     // Docsum queue size
+CONTENT_PROTON_EXECUTOR_DOCSUM_UTILIZATION   // Docsum utilization
+```
+
+<Note>
+Executor utilization values range from 0.0 (idle) to 1.0 (fully utilized). Values consistently above 0.8 may indicate bottlenecks.
+</Note>
+
+## Storage Metrics
+
+Storage layer metrics track data distribution, bucket management, and persistence operations.
+
+```java
+// Data storage (from StorageMetrics.java)
+VDS_DATASTORED_ALLDISKS_BUCKETS       // Buckets managed
+VDS_DATASTORED_ALLDISKS_DOCS          // Documents stored
+VDS_DATASTORED_ALLDISKS_BYTES         // Bytes stored
+VDS_DATASTORED_ALLDISKS_ACTIVEBUCKETS // Active buckets
+
+// File store operations
+VDS_FILESTOR_QUEUESIZE                // Operation queue size
+VDS_FILESTOR_AVERAGEQUEUEWAIT         // Average queue wait time (ms)
+VDS_FILESTOR_ALLTHREADS_PUT_LATENCY   // Put operation latency
+VDS_FILESTOR_ALLTHREADS_GET_LATENCY   // Get operation latency
+VDS_FILESTOR_ALLTHREADS_UPDATE_LATENCY // Update operation latency
+
+// Merge operations
+VDS_FILESTOR_ALLTHREADS_MERGELATENCYTOTAL  // Total merge latency
+VDS_MERGETHROTTLER_QUEUESIZE               // Merge queue size
+VDS_MERGETHROTTLER_ACTIVE_WINDOW_SIZE      // Active merges
+```
+
+## Setting Up Monitoring
+
+### Prometheus Integration
+
+<CodeGroup>
+```yaml prometheus.yml
+scrape_configs:
+  - job_name: 'vespa'
+    static_configs:
+      - targets: ['localhost:19092']
+    metrics_path: '/applicationmetrics/v1/prometheus'
+    scrape_interval: 30s
+```
+
+```yaml alerting-rules.yml
+groups:
+  - name: vespa_alerts
+    interval: 30s
+    rules:
+      - alert: HighQueryLatency
+        expr: query_latency_average > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High query latency detected"
+          
+      - alert: FeedingBlocked
+        expr: content_proton_resource_usage_feeding_blocked == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Feeding is blocked due to resource limits"
+```
+</CodeGroup>
+
+### Custom Metrics Consumer
+
+Define custom metric sets in `services.xml`:
+
+```xml
+<services>
+  <container version="1.0">
+    <metrics>
+      <consumer id="custom">
+        <metric id="query_latency"/>
+        <metric id="queries"/>
+        <metric id="feed.operations"/>
+        <metric id="mem.heap.used"/>
+      </consumer>
+    </metrics>
+  </container>
+</services>
+```
+
+Query specific consumer:
+```bash
+curl http://localhost:19092/metrics/v2/values?consumer=custom
+```
+
+## Health Checks
+
+### Node Health Status
+
+```bash
+# Check if node is healthy
+curl http://localhost:19050/state/v1/health
+
+# Response format:
+{
+  "status": {
+    "code": "up",
+    "message": "All OK"
+  }
+}
+```
+
+### Service Status Codes
+
+| Code | Status | Description |
+|------|--------|-------------|
+| `up` | Healthy | Service is operating normally |
+| `initializing` | Starting | Service is starting up |
+| `down` | Unhealthy | Service is not responding |
+
+## Visualization and Dashboards
+
+### Grafana Dashboard Example
+
+<Steps>
+  <Step title="Import Vespa Metrics">
+    Configure Prometheus as data source in Grafana
+  </Step>
+  
+  <Step title="Create Query Performance Panel">
+    ```promql
+    # Average query latency
+    rate(query_latency_sum[5m]) / rate(query_latency_count[5m])
+    
+    # Query throughput
+    rate(queries_count[5m])
+    ```
+  </Step>
+  
+  <Step title="Create Resource Usage Panel">
+    ```promql
+    # Memory utilization
+    content_proton_resource_usage_memory
+    
+    # Disk utilization
+    content_proton_resource_usage_disk
+    ```
+  </Step>
+</Steps>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Monitoring Frequency">
+    - **Critical metrics**: Monitor every 10-30 seconds
+    - **Resource metrics**: Every 1 minute
+    - **Historical data**: Every 5-15 minutes
+    - Avoid over-monitoring (< 10s intervals) which can impact performance
+  </Accordion>
+  
+  <Accordion title="Alert Thresholds">
+    Set appropriate thresholds based on baseline performance:
+    - Query latency > 2x baseline for 5+ minutes
+    - Memory usage > 90% for 2+ minutes
+    - Feeding blocked for > 1 minute
+    - Thread pool rejection rate > 1% of requests
+  </Accordion>
+  
+  <Accordion title="Metric Retention">
+    - High-resolution metrics: 7-14 days
+    - Aggregated metrics: 90 days
+    - Long-term trends: 1 year+
+    - Use downsampling for long-term storage
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Scaling" icon="arrows-maximize" href="/operations/scaling">
+    Learn how to scale Vespa based on metrics
+  </Card>
+  <Card title="Tuning" icon="sliders" href="/operations/tuning">
+    Optimize performance using metric insights
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Debug issues using monitoring data
+  </Card>
+</CardGroup>

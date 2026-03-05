@@ -1,0 +1,475 @@
+---
+title: Text Embeddings
+---
+
+Vespa provides built-in embedder components that transform text into vector representations for semantic search, similarity matching, and retrieval tasks.
+
+## Overview
+
+Embedders implement the `Embedder` interface and can be used during:
+- **Document processing** - Embed text fields when indexing documents
+- **Query processing** - Embed query text for semantic search
+- **Custom processing** - Use embedders in custom components
+
+All embedders support:
+- Automatic tokenization and text preprocessing
+- Caching of embedding results
+- Configurable model parameters
+- ONNX model inference
+
+## Available Embedders
+
+<CardGroup cols={2}>
+  <Card title="BertBaseEmbedder" icon="b">
+    BERT-based models with WordPiece tokenization
+  </Card>
+  <Card title="HuggingFaceEmbedder" icon="face-smile">
+    Generic Hugging Face transformer models
+  </Card>
+  <Card title="ColBertEmbedder" icon="table-cells">
+    Multi-vector token-level embeddings
+  </Card>
+  <Card title="SpladeEmbedder" icon="sparkles">
+    Sparse learned embeddings
+  </Card>
+</CardGroup>
+
+## BertBaseEmbedder
+
+The `BertBaseEmbedder` supports BERT and BERT-compatible models (DistilBERT, RoBERTa, etc.).
+
+### Configuration
+
+```xml
+<container id="default" version="1.0">
+  <component id="myBertEmbedder" class="ai.vespa.embedding.BertBaseEmbedder" bundle="model-integration">
+    <config name="embedding.bert-base-embedder">
+      <tokenizerVocab>
+        <model>models/vocab.txt</model>
+      </tokenizerVocab>
+      <transformerModel>
+        <model>models/bert_model.onnx</model>
+      </transformerModel>
+      <transformerMaxTokens>384</transformerMaxTokens>
+      <transformerInputIds>input_ids</transformerInputIds>
+      <transformerAttentionMask>attention_mask</transformerAttentionMask>
+      <transformerTokenTypeIds>token_type_ids</transformerTokenTypeIds>
+      <transformerOutput>output_0</transformerOutput>
+      <poolingStrategy>mean</poolingStrategy>
+    </config>
+  </component>
+</container>
+```
+
+### Model Requirements
+
+BERT-compatible models must have three inputs:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/BertBaseEmbedder.java:23-30
+/**
+ * A BERT Base compatible embedder. This embedder uses a WordPiece embedder to
+ * produce a token sequence that is then input to a transformer model. A BERT base
+ * compatible transformer model must have three inputs:
+ *
+ *  - A token sequence (input_ids)
+ *  - An attention mask (attention_mask)
+ *  - Token types for cross encoding (token_type_ids)
+ */
+```
+
+### Pooling Strategies
+
+Configure how token embeddings are pooled into a sentence embedding:
+
+<Tabs>
+  <Tab title="Mean Pooling">
+    Average all token embeddings (recommended for most cases):
+    
+    ```xml
+    <poolingStrategy>mean</poolingStrategy>
+    ```
+  </Tab>
+  <Tab title="CLS Pooling">
+    Use only the [CLS] token embedding:
+    
+    ```xml
+    <poolingStrategy>cls</poolingStrategy>
+    ```
+  </Tab>
+</Tabs>
+
+### Schema Integration
+
+```
+schema doc {
+    document doc {
+        field text type string {}
+    }
+    
+    field embedding type tensor<float>(x[384]) {
+        indexing: input text | embed myBertEmbedder | attribute
+        attribute {
+            distance-metric: angular
+        }
+    }
+    
+    rank-profile semantic {
+        inputs {
+            query(q) tensor<float>(x[384])
+        }
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+}
+```
+
+## HuggingFaceEmbedder
+
+The `HuggingFaceEmbedder` supports any Hugging Face model exported to ONNX format.
+
+### Configuration
+
+```xml
+<component id="hf" class="ai.vespa.embedding.HuggingFaceEmbedder" bundle="model-integration">
+  <config name="embedding.hugging-face-embedder">
+    <tokenizerPath>
+      <model>models/tokenizer.json</model>
+    </tokenizerPath>
+    <transformerModel>
+      <model>models/model.onnx</model>
+    </transformerModel>
+    <transformerMaxTokens>512</transformerMaxTokens>
+    <transformerInputIds>input_ids</transformerInputIds>
+    <transformerAttentionMask>attention_mask</transformerAttentionMask>
+    <transformerOutput>last_hidden_state</transformerOutput>
+    <normalize>true</normalize>
+    <poolingStrategy>mean</poolingStrategy>
+  </config>
+</component>
+```
+
+### Model Inputs
+
+The embedder automatically detects the number of inputs your model requires:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/HuggingFaceEmbedder.java:54-73
+static ModelAnalysis analyze(OnnxEvaluator evaluator, HuggingFaceEmbedderConfig config) {
+    Map<String, TensorType> inputs = evaluator.getInputInfo();
+    int numInputs = inputs.size();
+    String inputIdsName = config.transformerInputIds();
+    String attentionMaskName = "";
+    String tokenTypeIdsName = "";
+    validateName(inputs, inputIdsName, "input");
+    // some new models have only 1 input
+    if (numInputs > 1) {
+        attentionMaskName = config.transformerAttentionMask();
+        validateName(inputs, attentionMaskName, "input");
+        // newer models have only 2 inputs (they do not use token type IDs)
+        if (numInputs > 2) {
+            tokenTypeIdsName = config.transformerTokenTypeIds();
+            validateName(inputs, tokenTypeIdsName, "input");
+        }
+    }
+    // ...
+}
+```
+
+### Normalization
+
+Enable L2 normalization for cosine similarity:
+
+```xml
+<normalize>true</normalize>
+```
+
+This normalizes embeddings to unit length, making cosine similarity equivalent to dot product.
+
+### Query and Document Instructions
+
+Some models require different prompts for queries vs documents:
+
+```xml
+<prependQuery>query: </prependQuery>
+<prependDocument>passage: </prependDocument>
+```
+
+### Binary Quantization
+
+Reduce memory usage with int8 quantization:
+
+```
+field embedding type tensor<int8>(x[64]) {
+    indexing: input text | embed hf | attribute
+}
+```
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/HuggingFaceEmbedder.java:216-234
+private Tensor binaryQuantization(HuggingFaceEmbedder.HFEmbeddingResult embeddingResult, TensorType targetType) {
+    long outputDimensions = embeddingResult.output().shape()[2];
+    long targetDimensions = targetType.dimensions().get(0).size().get();
+    //🪆 flexibility - packing only the first 8*targetDimension float values from the model output
+    long targetUnpackagedDimensions = 8 * targetDimensions;
+    if (targetUnpackagedDimensions > outputDimensions) {
+        throw new IllegalArgumentException("Cannot pack " + outputDimensions + " into " + targetDimensions + " int8's");
+    }
+    // pool and normalize using float version before binary quantization
+    TensorType poolingType = new TensorType.Builder(TensorType.Value.FLOAT).
+                                     indexed(targetType.indexedSubtype().dimensions().get(0).name(), targetUnpackagedDimensions)
+                                     .build();
+    Tensor result = analysis.poolingStrategy().toSentenceEmbedding(poolingType, embeddingResult.output(), embeddingResult.attentionMask());
+    result = normalize ? EmbeddingNormalizer.normalize(result, poolingType) : result;
+    Tensor packedResult = Tensors.packBits(result);
+    return packedResult;
+}
+```
+
+## ColBertEmbedder
+
+ColBERT produces multiple vectors per text (one per token), enabling fine-grained similarity matching.
+
+### Configuration
+
+```xml
+<component id="colbert" class="ai.vespa.embedding.ColBertEmbedder" bundle="model-integration">
+  <config name="embedding.col-bert-embedder">
+    <tokenizerPath>
+      <model>models/tokenizer.json</model>
+    </tokenizerPath>
+    <transformerModel>
+      <model>models/colbert.onnx</model>
+    </transformerModel>
+    <transformerMaxTokens>512</transformerMaxTokens>
+    <maxQueryTokens>32</maxQueryTokens>
+    <maxDocumentTokens>256</maxDocumentTokens>
+    <queryTokenId>1</queryTokenId>
+    <documentTokenId>2</documentTokenId>
+  </config>
+</component>
+```
+
+### Multi-Vector Schema
+
+ColBERT requires a mixed tensor type:
+
+```
+schema doc {
+    document doc {
+        field text type string {}
+    }
+    
+    field colbert type tensor<float>(token{}, x[128]) {
+        indexing: input text | embed colbert | attribute
+    }
+    
+    rank-profile colbert {
+        inputs {
+            query(qt) tensor<float>(qt{}, x[128])
+        }
+        first-phase {
+            expression: sum(
+                reduce(
+                    sum(
+                        query(qt) * attribute(colbert), x
+                    ),
+                    max, token
+                ),
+                qt
+            )
+        }
+    }
+}
+```
+
+### Token Filtering
+
+ColBERT automatically filters punctuation tokens for documents:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/ColBertEmbedder.java:45-105
+private static final String PUNCTUATION = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+
+protected TransformerInput buildTransformerInput(List<Long> tokens, int maxTokens, boolean isQuery) {
+    if (!isQuery) {
+        tokens = tokens.stream().filter(token -> !skipTokens.contains(token)).toList();
+    }
+    // ...
+}
+```
+
+## SpladeEmbedder
+
+SPLADE creates sparse embeddings using learned term importance weights.
+
+### Configuration
+
+```xml
+<component id="splade" class="ai.vespa.embedding.SpladeEmbedder" bundle="model-integration">
+  <config name="embedding.splade-embedder">
+    <tokenizerPath>
+      <model>models/tokenizer.json</model>
+    </tokenizerPath>
+    <transformerModel>
+      <model>models/splade.onnx</model>
+    </transformerModel>
+    <termScoreThreshold>0.0</termScoreThreshold>
+  </config>
+</component>
+```
+
+### Sparse Tensor Output
+
+SPLADE produces a mapped tensor with vocabulary terms as labels:
+
+```
+field splade type tensor<float>(term{}) {
+    indexing: input text | embed splade | attribute
+    attribute: fast-search
+}
+```
+
+### Custom Reduction
+
+SPLADE uses optimized reduction for performance:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/SpladeEmbedder.java:177-222
+public Tensor sparsifyCustomReduce(IndexedTensor modelOutput, TensorType tensorType) {
+    var builder = Tensor.Builder.of(tensorType);
+    long[] shape = modelOutput.shape();
+    int sequenceLength = (int) shape[1];
+    int vocabSize = (int) shape[2];
+
+    String dimension = tensorType.dimensions().get(0).name();
+    long [] tokens = new long[1];
+    DirectIndexedAddress directAddress = modelOutput.directAddress();
+    directAddress.setIndex(0,0);
+    for (int v = 0; v < vocabSize; v++) {
+        double maxValue = 0.0d;
+        directAddress.setIndex(2, v);
+        long increment = directAddress.getStride(1);
+        long directIndex = directAddress.getDirectIndex();
+        for (int s = 0; s < sequenceLength; s++) {
+            double value = modelOutput.get(directIndex + s * increment);
+            if (value > maxValue) {
+                maxValue = value;
+            }
+        }
+        double logOfRelu = Math.log(1 + maxValue);
+        if (logOfRelu > termScoreThreshold) {
+            tokens[0] = v;
+            String term = tokenizer.decode(tokens);
+            builder.cell()
+                    .label(dimension, term)
+                    .value(logOfRelu);
+        }
+    }
+    return builder.build();
+}
+```
+
+## Exporting Models to ONNX
+
+### From Hugging Face
+
+```python
+from optimum.onnxruntime import ORTModelForFeatureExtraction
+from transformers import AutoTokenizer
+
+model_id = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Export model to ONNX
+model = ORTModelForFeatureExtraction.from_pretrained(
+    model_id, export=True
+)
+model.save_pretrained("exported_model")
+
+# Save tokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer.save_pretrained("exported_model")
+```
+
+### From PyTorch
+
+```python
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+model = AutoModel.from_pretrained("model-name")
+tokenizer = AutoTokenizer.from_pretrained("model-name")
+
+# Create dummy input
+dummy_input = tokenizer("sample text", return_tensors="pt")
+
+# Export to ONNX
+torch.onnx.export(
+    model,
+    (dummy_input["input_ids"], 
+     dummy_input["attention_mask"],
+     dummy_input["token_type_ids"]),
+    "model.onnx",
+    input_names=["input_ids", "attention_mask", "token_type_ids"],
+    output_names=["last_hidden_state"],
+    dynamic_axes={
+        "input_ids": {0: "batch", 1: "sequence"},
+        "attention_mask": {0: "batch", 1: "sequence"},
+        "token_type_ids": {0: "batch", 1: "sequence"},
+        "last_hidden_state": {0: "batch", 1: "sequence"}
+    },
+    opset_version=14
+)
+```
+
+## Performance Tuning
+
+### Caching
+
+Embedders automatically cache results per request:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/embedding/HuggingFaceEmbedder.java:180-183
+private HuggingFaceEmbedder.HFEmbeddingResult lookupOrEvaluate(Context context, String text) {
+    var key = new HFEmbedderCacheKey(context.getEmbedderId(), text);
+    return context.computeCachedValueIfAbsent(key, () -> evaluate(context, text));
+}
+```
+
+### Thread Configuration
+
+Configure ONNX Runtime threads in `onnx-evaluator.def`:
+
+```xml
+<config name="ai.vespa.modelintegration.evaluator.onnx-evaluator">
+  <executionMode>sequential</executionMode>
+  <interOpThreads>1</interOpThreads>
+  <intraOpThreads>-4</intraOpThreads>  <!-- CPUs / 4 -->
+</config>
+```
+
+### GPU Acceleration
+
+Enable GPU inference:
+
+```xml
+<gpuDevice>0</gpuDevice>  <!-- Use first GPU, -1 for CPU -->
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="ONNX Models" icon="brain" href="/ml/onnx-models">
+    Learn about ONNX model deployment
+  </Card>
+  <Card title="Semantic Search" icon="magnifying-glass">
+    Build semantic search with embeddings
+  </Card>
+  <Card title="RAG Applications" icon="robot" href="/ml/rag-applications">
+    Combine embeddings with generation
+  </Card>
+  <Card title="Performance" icon="gauge">
+    Optimize embedding performance
+  </Card>
+</CardGroup>

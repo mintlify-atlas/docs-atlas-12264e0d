@@ -1,0 +1,593 @@
+---
+title: Document v1 API
+description: HTTP API for document CRUD operations, visits, and bulk operations
+---
+
+The Document v1 API (`/document/v1/`) provides HTTP access to document operations in Vespa. It supports creating, reading, updating, and deleting documents, as well as bulk operations through the visitor pattern.
+
+## Base URL
+
+```
+http://<host>:8080/document/v1/
+```
+
+## Document ID Structure
+
+Vespa document IDs follow the format:
+
+```
+id:<namespace>:<document-type>:[n=<number>|g=<group>]:<user-specified>
+```
+
+The Document v1 API exposes this as a path structure:
+
+```
+/document/v1/<namespace>/<document-type>/docid/<user-specified>
+/document/v1/<namespace>/<document-type>/number/<number>/<user-specified>
+/document/v1/<namespace>/<document-type>/group/<group>/<user-specified>
+```
+
+## Single Document Operations
+
+### Get Document
+
+Retrieve a single document by ID.
+
+```bash
+curl http://localhost:8080/document/v1/mynamespace/music/docid/1
+```
+
+**Request**
+
+<ParamField path="namespace" type="string" required>
+  Document namespace
+</ParamField>
+
+<ParamField path="document-type" type="string" required>
+  Document type as defined in your schema
+</ParamField>
+
+<ParamField path="docid" type="string" required>
+  User-specified document identifier
+</ParamField>
+
+<ParamField query="cluster" type="string">
+  Target content cluster (required if multiple clusters exist)
+</ParamField>
+
+<ParamField query="fieldSet" type="string" default="[document]">
+  Field set to retrieve. Examples:
+  - `[document]` - All document fields
+  - `[id]` - Only document ID
+  - `music:[document]` - All fields from music document type
+  - `artist,title` - Specific fields
+</ParamField>
+
+<ParamField query="timeout" type="string" default="180s">
+  Request timeout (e.g., `5s`, `1000ms`)
+</ParamField>
+
+<ParamField query="tracelevel" type="integer" default="0">
+  Trace level 0-9 for debugging
+</ParamField>
+
+**Response**
+
+```json
+{
+  "pathId": "/document/v1/mynamespace/music/docid/1",
+  "id": "id:mynamespace:music::1",
+  "fields": {
+    "artist": "Tom Waits",
+    "title": "Downtown Train",
+    "year": 1985
+  }
+}
+```
+
+<ResponseField name="pathId" type="string">
+  The request path
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  The full document ID
+</ResponseField>
+
+<ResponseField name="fields" type="object">
+  Document fields as key-value pairs
+</ResponseField>
+
+### Put Document (Create/Replace)
+
+Create a new document or replace an existing one.
+
+```bash
+curl -X POST http://localhost:8080/document/v1/mynamespace/music/docid/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fields": {
+      "artist": "Tom Waits",
+      "title": "Downtown Train",
+      "year": 1985
+    }
+  }'
+```
+
+**Request Body**
+
+```json
+{
+  "fields": {
+    "artist": "Tom Waits",
+    "title": "Downtown Train",
+    "year": 1985
+  }
+}
+```
+
+<ParamField body="fields" type="object" required>
+  Document fields to set
+</ParamField>
+
+<ParamField query="create" type="boolean" default="false">
+  If `true`, only create document if it doesn't exist (returns error if exists)
+</ParamField>
+
+<ParamField query="condition" type="string">
+  Test-and-set condition that must be true for operation to succeed
+</ParamField>
+
+<ParamField query="route" type="string">
+  Route string for the operation
+</ParamField>
+
+**Example: Conditional Put**
+
+```bash
+curl -X POST "http://localhost:8080/document/v1/mynamespace/music/docid/1?condition=music.year<2000" \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"artist": "Updated Artist"}}'
+```
+
+**Response**
+
+```json
+{
+  "pathId": "/document/v1/mynamespace/music/docid/1",
+  "id": "id:mynamespace:music::1"
+}
+```
+
+### Update Document
+
+Partially update an existing document.
+
+```bash
+curl -X PUT http://localhost:8080/document/v1/mynamespace/music/docid/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fields": {
+      "year": {
+        "assign": 1988
+      }
+    }
+  }'
+```
+
+**Update Operations**
+
+<Tabs>
+  <Tab title="Assign">
+    Set a field to a new value:
+    ```json
+    {
+      "fields": {
+        "year": {"assign": 1988}
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Add to Array">
+    Add element to array field:
+    ```json
+    {
+      "fields": {
+        "tags": {
+          "add": ["rock", "blues"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Remove from Array">
+    Remove element from array:
+    ```json
+    {
+      "fields": {
+        "tags": {
+          "remove": ["pop"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Increment">
+    Increment numeric field:
+    ```json
+    {
+      "fields": {
+        "play_count": {
+          "increment": 1
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<ParamField query="create" type="boolean" default="false">
+  If `true`, create document if it doesn't exist
+</ParamField>
+
+<ParamField query="condition" type="string">
+  Test-and-set condition
+</ParamField>
+
+### Delete Document
+
+Delete a document by ID.
+
+```bash
+curl -X DELETE http://localhost:8080/document/v1/mynamespace/music/docid/1
+```
+
+<ParamField query="condition" type="string">
+  Test-and-set condition that must be true for deletion to succeed
+</ParamField>
+
+**Example: Conditional Delete**
+
+```bash
+curl -X DELETE "http://localhost:8080/document/v1/mynamespace/music/docid/1?condition=music.year<1990"
+```
+
+## Bulk Operations (Visitor)
+
+The Document v1 API supports bulk operations through the visitor pattern.
+
+### Visit Documents
+
+Retrieve multiple documents matching a selection.
+
+```bash
+curl "http://localhost:8080/document/v1/mynamespace/music/docid?selection=music.year>2000&cluster=content"
+```
+
+<ParamField query="selection" type="string">
+  Document selection expression (required for most bulk operations)
+</ParamField>
+
+<ParamField query="cluster" type="string" required>
+  Target content cluster
+</ParamField>
+
+<ParamField query="continuation" type="string">
+  Continuation token from previous visit response
+</ParamField>
+
+<ParamField query="wantedDocumentCount" type="integer" default="unspecified">
+  Approximate number of documents to return
+</ParamField>
+
+<ParamField query="concurrency" type="integer" default="1">
+  Number of parallel visitors (1-1024)
+</ParamField>
+
+<ParamField query="bucketSpace" type="string" default="default">
+  Bucket space: `default` or `global`
+</ParamField>
+
+<ParamField query="fieldSet" type="string" default="[document]">
+  Fields to retrieve
+</ParamField>
+
+<ParamField query="stream" type="boolean" default="false">
+  Enable streaming mode for large result sets (JSONL format)
+</ParamField>
+
+<ParamField query="slices" type="integer">
+  Number of slices for parallel processing
+</ParamField>
+
+<ParamField query="sliceId" type="integer">
+  Specific slice to process (0 to slices-1)
+</ParamField>
+
+**Response**
+
+```json
+{
+  "pathId": "/document/v1/mynamespace/music/docid",
+  "documents": [
+    {
+      "id": "id:mynamespace:music::1",
+      "fields": {
+        "artist": "Tom Waits",
+        "year": 2002
+      }
+    },
+    {
+      "id": "id:mynamespace:music::2",
+      "fields": {
+        "artist": "Nick Cave",
+        "year": 2003
+      }
+    }
+  ],
+  "continuation": "AAAAEAAAAAAAAAM...",
+  "documentCount": 2
+}
+```
+
+<ResponseField name="documents" type="array">
+  Array of matching documents
+</ResponseField>
+
+<ResponseField name="continuation" type="string">
+  Token to retrieve next batch (if more documents available)
+</ResponseField>
+
+<ResponseField name="documentCount" type="integer">
+  Number of documents in this response
+</ResponseField>
+
+**Example: Streaming Visit**
+
+```bash
+curl "http://localhost:8080/document/v1/mynamespace/music/docid?selection=true&cluster=content&stream=true"
+```
+
+Returns JSONL (one JSON object per line):
+
+```jsonl
+{"id":"id:mynamespace:music::1","fields":{"artist":"Tom Waits"}}
+{"id":"id:mynamespace:music::2","fields":{"artist":"Nick Cave"}}
+```
+
+### Bulk Update
+
+Update multiple documents matching a selection.
+
+```bash
+curl -X PUT "http://localhost:8080/document/v1/mynamespace/music/docid/?selection=music.year<2000&cluster=content" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fields": {
+      "category": {
+        "assign": "classic"
+      }
+    }
+  }'
+```
+
+<Note>
+The `selection` parameter is required for bulk updates to prevent accidental modification of all documents.
+</Note>
+
+### Bulk Delete
+
+Delete multiple documents matching a selection.
+
+```bash
+curl -X DELETE "http://localhost:8080/document/v1/mynamespace/music/docid/?selection=music.year<1980&cluster=content"
+```
+
+### Copy Documents
+
+Copy documents from one cluster to another.
+
+```bash
+curl -X POST "http://localhost:8080/document/v1/mynamespace/music/docid/?selection=true&cluster=content&destinationCluster=content2"
+```
+
+<ParamField query="destinationCluster" type="string" required>
+  Target cluster for copy operation
+</ParamField>
+
+## Advanced Features
+
+### Test-and-Set (Conditional Operations)
+
+Use test-and-set to ensure operations only succeed when conditions are met:
+
+```bash
+curl -X PUT "http://localhost:8080/document/v1/mynamespace/music/docid/1?condition=music.version==1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fields": {
+      "version": {"assign": 2}
+    }
+  }'
+```
+
+If the condition fails, the API returns HTTP 412 (Precondition Failed).
+
+### Grouping Documents
+
+Use number or group distribution for data locality:
+
+**Number Grouping**
+```bash
+# Documents with user_id 123 co-located
+curl http://localhost:8080/document/v1/mynamespace/music/number/123/song1
+curl http://localhost:8080/document/v1/mynamespace/music/number/123/song2
+```
+
+**Group Grouping**
+```bash
+# Documents in same group co-located
+curl http://localhost:8080/document/v1/mynamespace/music/group/rock/song1
+curl http://localhost:8080/document/v1/mynamespace/music/group/rock/song2
+```
+
+### Time-based Visiting
+
+Visit documents modified within a time range:
+
+<ParamField query="fromTimestamp" type="integer">
+  Unix timestamp (microseconds) - start of range
+</ParamField>
+
+<ParamField query="toTimestamp" type="integer">
+  Unix timestamp (microseconds) - end of range
+</ParamField>
+
+<ParamField query="includeRemoves" type="boolean" default="false">
+  Include removed documents (tombstones)
+</ParamField>
+
+```bash
+curl "http://localhost:8080/document/v1/mynamespace/music/docid/?selection=true&cluster=content&fromTimestamp=1609459200000000"
+```
+
+### Dry Run Mode
+
+Test operations without actually executing them:
+
+<ParamField query="dryRun" type="boolean" default="false">
+  If true, validate operation but don't execute
+</ParamField>
+
+```bash
+curl -X POST "http://localhost:8080/document/v1/mynamespace/music/docid/1?dryRun=true" \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"artist": "Test"}}'
+```
+
+## Request Size Limits
+
+The Document v1 API has configurable request size limits:
+
+- Default maximum request size: configurable per deployment
+- Large documents should be split or use streaming
+
+If a request exceeds limits, the API returns HTTP 413 (Request Too Large).
+
+## Performance Tips
+
+1. **Use Streaming for Large Visits**: Enable `stream=true` for large result sets to reduce memory usage
+2. **Parallel Visiting**: Use `concurrency` parameter to speed up bulk operations
+3. **Field Sets**: Request only needed fields using `fieldSet` parameter
+4. **Batch Updates**: Use bulk update operations instead of individual updates
+5. **Connection Pooling**: Reuse HTTP connections for better throughput
+
+## Error Handling
+
+<ResponseField name="message" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**Common Error Status Codes**
+
+| Status | Meaning |
+|--------|----------|
+| 400 | Invalid request format or parameters |
+| 404 | Document not found |
+| 412 | Test-and-set condition failed |
+| 413 | Request size too large |
+| 429 | Too many requests (rate limited) |
+| 500 | Internal server error |
+| 504 | Request timeout |
+| 507 | Insufficient storage space |
+
+**Example Error Response**
+
+```json
+{
+  "pathId": "/document/v1/mynamespace/music/docid/1",
+  "message": "Document not found"
+}
+```
+
+## Examples
+
+<CodeGroup>
+```bash cURL
+# Get document
+curl http://localhost:8080/document/v1/mynamespace/music/docid/1
+
+# Put document
+curl -X POST http://localhost:8080/document/v1/mynamespace/music/docid/1 \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"artist": "Tom Waits"}}'
+
+# Update document
+curl -X PUT http://localhost:8080/document/v1/mynamespace/music/docid/1 \
+  -H "Content-Type: application/json" \
+  -d '{"fields": {"year": {"assign": 1985}}}'
+
+# Visit documents
+curl "http://localhost:8080/document/v1/mynamespace/music/docid?selection=true&cluster=content"
+```
+
+```python Python
+import requests
+
+base_url = "http://localhost:8080/document/v1"
+
+# Get document
+response = requests.get(f"{base_url}/mynamespace/music/docid/1")
+doc = response.json()
+
+# Put document
+response = requests.post(
+    f"{base_url}/mynamespace/music/docid/1",
+    json={"fields": {"artist": "Tom Waits"}}
+)
+
+# Update document
+response = requests.put(
+    f"{base_url}/mynamespace/music/docid/1",
+    json={"fields": {"year": {"assign": 1985}}}
+)
+
+# Visit documents
+response = requests.get(
+    f"{base_url}/mynamespace/music/docid",
+    params={"selection": "true", "cluster": "content"}
+)
+docs = response.json()["documents"]
+```
+
+```java Java
+import java.net.http.*;
+import java.net.URI;
+
+HttpClient client = HttpClient.newHttpClient();
+
+// Get document
+HttpRequest request = HttpRequest.newBuilder()
+    .uri(URI.create("http://localhost:8080/document/v1/mynamespace/music/docid/1"))
+    .GET()
+    .build();
+
+HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+// Put document
+String json = "{\"fields\": {\"artist\": \"Tom Waits\"}}";
+request = HttpRequest.newBuilder()
+    .uri(URI.create("http://localhost:8080/document/v1/mynamespace/music/docid/1"))
+    .header("Content-Type", "application/json")
+    .POST(HttpRequest.BodyPublishers.ofString(json))
+    .build();
+
+response = client.send(request, HttpResponse.BodyHandlers.ofString());
+```
+</CodeGroup>
+
+## Related Documentation
+
+- [Document Processors](/development/document-processors)
+- [Indexing](/data/indexing)
+- [Feeding Data](/data/feeding-data)
+- [Search API](/api/search-api)

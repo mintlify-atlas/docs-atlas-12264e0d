@@ -1,0 +1,245 @@
+---
+title: Machine Learning Models Overview
+---
+
+Vespa provides comprehensive support for integrating machine learning models into your search and recommendation applications. You can deploy models for embeddings, ranking, text generation, and custom inference tasks.
+
+## Supported Model Formats
+
+Vespa supports multiple model formats and frameworks:
+
+<CardGroup cols={2}>
+  <Card title="ONNX Models" icon="brain" href="/ml/onnx-models">
+    Deploy ONNX models for inference in ranking and stateless evaluation
+  </Card>
+  <Card title="LightGBM & XGBoost" icon="tree">
+    Native support for gradient boosting models
+  </Card>
+  <Card title="TensorFlow" icon="code">
+    Convert TensorFlow models to ONNX or ranking expressions
+  </Card>
+  <Card title="PyTorch" icon="fire">
+    Export PyTorch models to ONNX for deployment
+  </Card>
+</CardGroup>
+
+## Model Integration Components
+
+Vespa provides several built-in components for model integration:
+
+### Embedders
+
+Embedders transform text into vector representations for semantic search and retrieval:
+
+- **BertBaseEmbedder** - BERT-based text embeddings
+- **HuggingFaceEmbedder** - Generic Hugging Face transformer models
+- **ColBertEmbedder** - Multi-vector representations for token-level matching
+- **SpladeEmbedder** - Sparse learned embeddings
+
+<Note>
+See the [Embeddings](/ml/embeddings) page for detailed configuration and examples.
+</Note>
+
+### Model Evaluation
+
+Vespa supports two modes of model evaluation:
+
+<AccordionGroup>
+  <Accordion title="Stateless Model Evaluation">
+    Models are evaluated in container nodes using the `ModelsEvaluator` API. This is suitable for:
+    - Pre-processing and feature generation
+    - Stateless inference tasks
+    - REST API endpoints for model serving
+    
+    ```java
+    // From: model-evaluation/src/main/java/ai/vespa/models/evaluation/ModelsEvaluator.java
+    public FunctionEvaluator evaluatorOf(String modelName, String ... names) {
+        return requireModel(modelName).evaluatorOf(names);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Content Node Ranking">
+    Models are evaluated during document ranking on content nodes. This is optimal for:
+    - First-phase and second-phase ranking
+    - Per-document model inference
+    - Low-latency ranking with model scoring
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+Learn more about the differences in [Stateless Model Evaluation](/ml/stateless-model-evaluation).
+</Note>
+
+## Model Deployment Workflow
+
+<Steps>
+  <Step title="Export or Train Your Model">
+    Train your model using your preferred framework (PyTorch, TensorFlow, etc.) and export to ONNX format.
+    
+    ```python
+    import torch.onnx
+    
+    # Export PyTorch model to ONNX
+    torch.onnx.export(
+        model,
+        dummy_input,
+        "model.onnx",
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes={'input': {0: 'batch_size'}}
+    )
+    ```
+  </Step>
+  
+  <Step title="Add Model to Application Package">
+    Place the model file in your application package:
+    
+    ```
+    my-app/
+    ├── services.xml
+    ├── schemas/
+    └── models/
+        └── my_model.onnx
+    ```
+  </Step>
+  
+  <Step title="Configure Model in Schema">
+    Reference the model in your schema file:
+    
+    ```
+    schema doc {
+        document doc {
+            field text type string {}
+        }
+        
+        onnx-model my_model {
+            file: models/my_model.onnx
+            input input_ids: input_tokens
+            output output: last_hidden_state
+        }
+        
+        rank-profile with_model {
+            first-phase {
+                expression: onnx(my_model).output
+            }
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Deploy and Query">
+    Deploy your application and start using the model in queries:
+    
+    ```bash
+    vespa deploy
+    vespa query 'yql=select * from doc where ...' \
+      'ranking=with_model'
+    ```
+  </Step>
+</Steps>
+
+## Model Configuration
+
+Vespa models are configured using the `onnx-model` element in schema files:
+
+```
+onnx-model model_name {
+    file: models/model.onnx
+    
+    # Map ONNX input names to Vespa expressions
+    input input_ids: tokenInputIds
+    input attention_mask: tokenAttentionMask
+    
+    # Map ONNX output names
+    output embeddings: last_hidden_state
+}
+```
+
+### Runtime Options
+
+Configure model execution settings in `services.xml`:
+
+```xml
+<container id="default" version="1.0">
+  <component id="ai.vespa.modelintegration.evaluator.OnnxRuntime" 
+             bundle="model-integration">
+    <config name="ai.vespa.modelintegration.evaluator.onnx-evaluator">
+      <execution_mode>sequential</execution_mode>
+      <inter_op_threads>1</inter_op_threads>
+      <intra_op_threads>-4</intra_op_threads>
+      <gpu_device>0</gpu_device>
+    </config>
+  </component>
+</container>
+```
+
+## Model Types by Use Case
+
+### Embedding Models
+
+For semantic search and vector similarity:
+- BERT, RoBERTa, DistilBERT
+- Sentence Transformers
+- E5, BGE, GTE models
+- ColBERT for multi-vector search
+
+### Ranking Models
+
+For learning-to-rank and document scoring:
+- Cross-encoders (BERT-based rerankers)
+- LightGBM, XGBoost
+- Custom neural ranking models
+
+### Generation Models
+
+For text generation and RAG applications:
+- T5, BART for sequence-to-sequence
+- GPT models for completion
+- Integration with LLM APIs
+
+<Note>
+See [RAG Applications](/ml/rag-applications) for examples of combining retrieval and generation.
+</Note>
+
+## Performance Considerations
+
+### Model Size
+
+- **Small models** (< 100MB): Can be evaluated on all nodes
+- **Medium models** (100MB - 1GB): Consider stateless evaluation
+- **Large models** (> 1GB): Use external model servers or GPU acceleration
+
+### Execution Modes
+
+```java
+// From: model-integration/src/main/java/ai/vespa/modelintegration/evaluator/OnnxEvaluator.java
+public interface OnnxEvaluator extends AutoCloseable {
+    Tensor evaluate(Map<String, Tensor> inputs, String output);
+    Map<String, Tensor> evaluate(Map<String, Tensor> inputs);
+    
+    Map<String, TensorType> getInputInfo();
+    Map<String, TensorType> getOutputInfo();
+}
+```
+
+Configure execution mode based on your workload:
+- `sequential`: Single-threaded execution (default)
+- `parallel`: Multi-threaded for batch processing
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Text Embeddings" icon="vector-square" href="/ml/embeddings">
+    Configure embedder components for semantic search
+  </Card>
+  <Card title="ONNX Models" icon="brain" href="/ml/onnx-models">
+    Deploy and configure ONNX models
+  </Card>
+  <Card title="Model Evaluation" icon="gauge" href="/ml/stateless-model-evaluation">
+    Choose between stateless and ranking evaluation
+  </Card>
+  <Card title="RAG Applications" icon="robot" href="/ml/rag-applications">
+    Build retrieval-augmented generation systems
+  </Card>
+</CardGroup>

@@ -1,0 +1,560 @@
+---
+title: ONNX Models
+---
+
+Vespa provides native support for ONNX (Open Neural Network Exchange) models, enabling you to deploy machine learning models from PyTorch, TensorFlow, scikit-learn, and other frameworks.
+
+## Overview
+
+ONNX models can be used for:
+- **Ranking** - Score documents during search
+- **Embeddings** - Generate vector representations
+- **Feature extraction** - Transform data for downstream tasks
+- **Stateless inference** - Serve predictions via REST API
+
+Vespa evaluates ONNX models using ONNX Runtime, providing high-performance inference on CPU and GPU.
+
+## Adding ONNX Models
+
+<Steps>
+  <Step title="Export Your Model to ONNX">
+    Convert your trained model to ONNX format:
+    
+    ```python
+    import torch
+    import torch.onnx
+    
+    # Load your PyTorch model
+    model = MyModel()
+    model.load_state_dict(torch.load('model.pt'))
+    model.eval()
+    
+    # Create dummy input
+    dummy_input = torch.randn(1, 10)
+    
+    # Export to ONNX
+    torch.onnx.export(
+        model,
+        dummy_input,
+        "my_model.onnx",
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes={
+            'input': {0: 'batch_size'},
+            'output': {0: 'batch_size'}
+        },
+        opset_version=14
+    )
+    ```
+  </Step>
+  
+  <Step title="Add Model to Application Package">
+    Place the ONNX file in your application's `models/` directory:
+    
+    ```
+    my-app/
+    ├── services.xml
+    ├── schemas/
+    │   └── doc.sd
+    └── models/
+        └── my_model.onnx
+    ```
+  </Step>
+  
+  <Step title="Declare Model in Schema">
+    Reference the model in your schema file:
+    
+    ```
+    schema doc {
+        onnx-model my_model {
+            file: models/my_model.onnx
+            input input: my_input_expression
+            output output: my_output
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Use Model in Ranking">
+    Reference the model in rank profiles:
+    
+    ```
+    rank-profile with_onnx {
+        function my_input_expression() {
+            expression: tensor<float>(d0[10]):[1,2,3,4,5,6,7,8,9,10]
+        }
+        
+        first-phase {
+            expression: onnx(my_model).output
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Model Configuration
+
+### Basic Declaration
+
+Declare an ONNX model in your schema:
+
+```
+onnx-model classifier {
+    file: models/classifier.onnx
+}
+```
+
+### Input Mapping
+
+Map ONNX input names to Vespa expressions:
+
+```
+onnx-model scorer {
+    file: models/scorer.onnx
+    
+    # Map ONNX inputs to Vespa features
+    input input_ids: tokenSequence
+    input attention_mask: tokenMask
+    input segment_ids: tokenTypes
+}
+```
+
+```java
+// From: config-model/src/main/java/com/yahoo/schema/OnnxModel.java:57-84
+private String validateInputSource(String source) {
+    var optRef = Reference.simple(source);
+    if (optRef.isPresent()) {
+        Reference ref = optRef.get();
+        // input can be one of:
+        // attribute(foo), query(foo), constant(foo)
+        if (FeatureNames.isSimpleFeature(ref)) {
+            return ref.toString();
+        }
+        // or a function (evaluated by backend)
+        if (ref.isSimpleRankingExpressionWrapper()) {
+            var arg = ref.simpleArgument();
+            if (arg.isPresent()) {
+                return ref.toString();
+            }
+        }
+    } else {
+        // otherwise it must be an identifier
+        Reference ref = Reference.fromIdentifier(source);
+        return ref.toString();
+    }
+    // invalid input source
+    throw new IllegalArgumentException("invalid input for ONNX model " + getName() + ": " + source);
+}
+```
+
+Valid input sources:
+- `attribute(field_name)` - Document attribute
+- `query(param_name)` - Query parameter
+- `constant(const_name)` - Ranking constant
+- Function names defined in the rank profile
+
+### Output Mapping
+
+Map ONNX output names to Vespa identifiers:
+
+```
+onnx-model encoder {
+    file: models/encoder.onnx
+    output embeddings: last_hidden_state
+    output pooled: pooler_output
+}
+```
+
+Reference outputs in ranking:
+
+```
+rank-profile semantic {
+    first-phase {
+        expression: onnx(encoder).embeddings
+    }
+}
+```
+
+## ONNX Runtime Configuration
+
+Configure ONNX Runtime execution in `services.xml`:
+
+```xml
+<container id="default" version="1.0">
+  <component id="ai.vespa.modelintegration.evaluator.OnnxRuntime" 
+             bundle="model-integration">
+    <config name="ai.vespa.modelintegration.evaluator.onnx-evaluator">
+      <!-- Execution mode: sequential or parallel -->
+      <executionMode>sequential</executionMode>
+      
+      <!-- Number of threads for parallel execution -->
+      <interOpThreads>1</interOpThreads>
+      
+      <!-- Intra-op threads: -4 means CPUs/4, 0 means CPUs, >0 is explicit count -->
+      <intraOpThreads>-4</intraOpThreads>
+      
+      <!-- GPU device: 0+ for GPU device ID, -1 for CPU -->
+      <gpuDevice>-1</gpuDevice>
+    </config>
+  </component>
+</container>
+```
+
+### Execution Modes
+
+<Tabs>
+  <Tab title="Sequential (Default)">
+    Single-threaded execution, best for low-latency inference:
+    
+    ```xml
+    <executionMode>sequential</executionMode>
+    <interOpThreads>1</interOpThreads>
+    ```
+  </Tab>
+  
+  <Tab title="Parallel">
+    Multi-threaded execution for batch processing:
+    
+    ```xml
+    <executionMode>parallel</executionMode>
+    <interOpThreads>4</interOpThreads>
+    <intraOpThreads>2</intraOpThreads>
+    ```
+  </Tab>
+</Tabs>
+
+### GPU Acceleration
+
+Enable GPU inference with CUDA:
+
+```xml
+<gpuDevice>0</gpuDevice>  <!-- Use first GPU -->
+```
+
+<Warning>
+GPU support requires ONNX Runtime with CUDA provider. Ensure your deployment environment has compatible CUDA drivers.
+</Warning>
+
+## Using ONNX Models
+
+### In Ranking Expressions
+
+Reference ONNX models in rank profiles:
+
+```
+schema product {
+    document product {
+        field title type string {}
+        field price type float {}
+        field category type string {}
+    }
+    
+    onnx-model ranker {
+        file: models/ranker.onnx
+        input features: featureVector
+    }
+    
+    rank-profile ml_ranking {
+        function featureVector() {
+            expression: tensor<float>(d0[5]):[
+                attribute(price),
+                query(user_score),
+                fieldMatch(title).completeness,
+                attribute(popularity),
+                freshness(timestamp)
+            ]
+        }
+        
+        first-phase {
+            expression: onnx(ranker).output
+        }
+    }
+}
+```
+
+### With Multiple Outputs
+
+Access specific model outputs:
+
+```
+onnx-model multi_output {
+    file: models/multi.onnx
+    output scores: output_scores
+    output embeddings: output_embeddings
+}
+
+rank-profile combined {
+    first-phase {
+        expression: onnx(multi_output).scores
+    }
+    
+    second-phase {
+        expression: sum(onnx(multi_output).embeddings * query(q_vec))
+    }
+}
+```
+
+### Stateless Evaluation API
+
+Use the `ModelsEvaluator` API for stateless inference:
+
+```java
+// From: model-evaluation/src/main/java/ai/vespa/models/evaluation/ModelsEvaluator.java:17-24
+/**
+ * Evaluates machine-learned models added to Vespa applications and available as config form.
+ * Usage:
+ * <code>Tensor result = evaluator.bind("foo", value).bind("bar", value").evaluate()</code>
+ *
+ * @author bratseth
+ */
+public class ModelsEvaluator extends AbstractComponent {
+    public FunctionEvaluator evaluatorOf(String modelName, String ... names) {
+        return requireModel(modelName).evaluatorOf(names);
+    }
+}
+```
+
+Access via REST API:
+
+```bash
+curl 'http://localhost:8080/model-evaluation/v1/my_model/eval' \
+  -d '{"input": [1.0, 2.0, 3.0, 4.0, 5.0]}'
+```
+
+## Model Optimization
+
+### Model Quantization
+
+Reduce model size and improve performance with quantization:
+
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+# Dynamic quantization
+quantize_dynamic(
+    model_input="model.onnx",
+    model_output="model_quantized.onnx",
+    weight_type=QuantType.QUInt8
+)
+```
+
+### Model Simplification
+
+Simplify ONNX graphs:
+
+```python
+import onnx
+from onnxsim import simplify
+
+# Load and simplify model
+model = onnx.load("model.onnx")
+model_simplified, check = simplify(model)
+assert check, "Simplified model is invalid"
+
+onnx.save(model_simplified, "model_simplified.onnx")
+```
+
+### Dynamic Shapes
+
+Support variable batch sizes and sequence lengths:
+
+```python
+torch.onnx.export(
+    model,
+    dummy_input,
+    "model.onnx",
+    dynamic_axes={
+        'input_ids': {0: 'batch', 1: 'sequence'},
+        'attention_mask': {0: 'batch', 1: 'sequence'},
+        'output': {0: 'batch', 1: 'sequence'}
+    }
+)
+```
+
+## OnnxEvaluator Interface
+
+The core evaluation interface:
+
+```java
+// From: model-integration/src/main/java/ai/vespa/modelintegration/evaluator/OnnxEvaluator.java:10-29
+/**
+ * Evaluator for ONNX models.
+ *
+ * @author bjorncs
+ */
+public interface OnnxEvaluator extends AutoCloseable {
+
+    record IdAndType(String id, TensorType type) { }
+
+    Tensor evaluate(Map<String, Tensor> inputs, String output);
+    Map<String, Tensor> evaluate(Map<String, Tensor> inputs);
+
+    Map<String, OnnxEvaluator.IdAndType> getInputs();
+    Map<String, OnnxEvaluator.IdAndType> getOutputs();
+    Map<String, TensorType> getInputInfo();
+    Map<String, TensorType> getOutputInfo();
+
+    @Override void close();
+}
+```
+
+## Common Model Types
+
+### Classification Models
+
+```
+onnx-model classifier {
+    file: models/classifier.onnx
+    input features: featureVector
+    output logits: output
+}
+
+rank-profile classify {
+    function featureVector() {
+        expression: tensor<float>(d0[100]):[...]
+    }
+    
+    first-phase {
+        expression: onnx(classifier).logits
+    }
+}
+```
+
+### Reranking Models
+
+```
+onnx-model cross_encoder {
+    file: models/cross_encoder.onnx
+    input input_ids: inputSequence
+    input attention_mask: inputMask
+}
+
+rank-profile rerank {
+    first-phase {
+        expression: bm25(title) + bm25(body)
+    }
+    
+    second-phase {
+        expression: onnx(cross_encoder).logits{d0:0,d1:0}
+        rerank-count: 100
+    }
+}
+```
+
+### Embedding Models
+
+See the [Embeddings](/ml/embeddings) page for embedding-specific models.
+
+## Troubleshooting
+
+### Model Validation
+
+Vespa validates models at deployment:
+
+```bash
+vespa deploy
+# Check for errors like:
+# "Model does not contain required input: 'input_ids'"
+# "Model contains: input_tokens, attention_scores"
+```
+
+### Inspect Model Inputs/Outputs
+
+Use `onnx` Python package:
+
+```python
+import onnx
+
+model = onnx.load("model.onnx")
+
+print("Inputs:")
+for input in model.graph.input:
+    print(f"  {input.name}: {input.type}")
+
+print("Outputs:")
+for output in model.graph.output:
+    print(f"  {output.name}: {output.type}")
+```
+
+### Performance Issues
+
+<AccordionGroup>
+  <Accordion title="High Latency">
+    - Reduce model size through quantization
+    - Use dynamic batching for throughput
+    - Enable GPU acceleration
+    - Optimize intra-op thread count
+  </Accordion>
+  
+  <Accordion title="Memory Usage">
+    - Use model quantization (int8, uint8)
+    - Limit number of concurrent evaluations
+    - Monitor model size vs available RAM
+  </Accordion>
+  
+  <Accordion title="Incorrect Results">
+    - Verify input tensor shapes and types
+    - Check input/output name mappings
+    - Validate preprocessing matches training
+    - Test model with `onnxruntime` directly
+  </Accordion>
+</AccordionGroup>
+
+## Examples
+
+### TensorFlow to ONNX
+
+```python
+import tensorflow as tf
+import tf2onnx
+
+# Load TensorFlow model
+model = tf.keras.models.load_model('model.h5')
+
+# Convert to ONNX
+spec = (tf.TensorSpec((None, 10), tf.float32, name="input"),)
+output_path = "model.onnx"
+
+model_proto, _ = tf2onnx.convert.from_keras(
+    model, 
+    input_signature=spec,
+    opset=14,
+    output_path=output_path
+)
+```
+
+### scikit-learn to ONNX
+
+```python
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import FloatTensorType
+from sklearn.ensemble import RandomForestClassifier
+
+# Train sklearn model
+model = RandomForestClassifier()
+model.fit(X_train, y_train)
+
+# Convert to ONNX
+initial_type = [('float_input', FloatTensorType([None, X_train.shape[1]]))]
+onnx_model = convert_sklearn(model, initial_types=initial_type)
+
+with open("model.onnx", "wb") as f:
+    f.write(onnx_model.SerializeToString())
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Embeddings" icon="vector-square" href="/ml/embeddings">
+    Use ONNX models for text embeddings
+  </Card>
+  <Card title="Model Evaluation" icon="gauge" href="/ml/stateless-model-evaluation">
+    Stateless vs ranking evaluation
+  </Card>
+  <Card title="RAG Applications" icon="robot" href="/ml/rag-applications">
+    Combine models with retrieval
+  </Card>
+  <Card title="Performance Tuning" icon="sliders">
+    Optimize model inference
+  </Card>
+</CardGroup>

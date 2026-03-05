@@ -1,122 +1,164 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Vespa",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#040404",
+    "light": "#62d38b",
+    "dark": "#48825c"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/c73e1f50-df9d-4dc9-a847-145b110ec331.png",
+  "logo": {
+    "light": "https://media.brand.dev/b0bf5c44-921a-4f3e-956e-71a1f1364b7a.svg",
+    "dark": "https://media.brand.dev/b0bf5c44-921a-4f3e-956e-71a1f1364b7a.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/vespa-engine/vespa"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/vespa-engine/vespa"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/documents",
+              "concepts/schemas",
+              "concepts/search",
+              "concepts/ranking",
+              "concepts/tensors"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Search & Query",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "search/query-language",
+              "search/vector-search",
+              "search/text-search",
+              "search/grouping-aggregation",
+              "search/ranking-expressions"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Data Operations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "data/feeding-data",
+              "data/document-api",
+              "data/indexing",
+              "data/updates-deletes"
+            ]
+          },
+          {
+            "group": "Machine Learning",
+            "pages": [
+              "ml/models-overview",
+              "ml/embeddings",
+              "ml/onnx-models",
+              "ml/stateless-model-evaluation",
+              "ml/rag-applications"
+            ]
+          },
+          {
+            "group": "Configuration & Deployment",
+            "pages": [
+              "deployment/application-packages",
+              "deployment/services-xml",
+              "deployment/multinode-systems",
+              "deployment/docker",
+              "deployment/vespa-cloud"
+            ]
+          },
+          {
+            "group": "Performance & Operations",
+            "pages": [
+              "operations/monitoring",
+              "operations/scaling",
+              "operations/tuning",
+              "operations/troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "HTTP APIs",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/document-v1",
+              "api/search-api",
+              "api/deploy-api"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Java APIs",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/java/container",
+              "api/java/searcher",
+              "api/java/document-processor",
+              "api/java/component"
+            ]
+          },
+          {
+            "group": "Client Libraries",
+            "pages": [
+              "api/clients/vespa-cli",
+              "api/clients/java-client",
+              "api/clients/feed-client"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Development Guide",
+            "pages": [
+              "development/overview",
+              "development/building",
+              "development/testing",
+              "development/code-map"
+            ]
+          },
+          {
+            "group": "Component Development",
+            "pages": [
+              "development/searchers",
+              "development/document-processors",
+              "development/handlers",
+              "development/plugins"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/guide",
+              "contributing/pull-requests",
+              "contributing/versioning"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

@@ -1,0 +1,481 @@
+---
+title: 'Schemas'
+description: 'Define your data structures using Vespa schema definition language'
+---
+
+Schemas define the structure of your documents and how they should be processed, indexed, and ranked in Vespa. They are written in the **schema definition language** using `.sd` files.
+
+## What is a Schema?
+
+A schema is a declarative specification that defines:
+
+- Document structure (fields and types)
+- Indexing behavior (how fields are processed)
+- Search configuration (how queries match documents)
+- Ranking profiles (how results are scored)
+
+<Note>
+Schemas were previously called "search definitions", which is why the file extension is `.sd`.
+</Note>
+
+## Basic Schema Structure
+
+Here's a simple schema example:
+
+```javascript music.sd
+schema music {
+    document music {
+        field title type string {
+            indexing: index | summary
+        }
+        
+        field artist type string {
+            indexing: index | summary
+        }
+        
+        field year type int {
+            indexing: summary | attribute
+        }
+    }
+}
+```
+
+*This example is similar to schemas found in the Vespa codebase*
+
+## Schema Components
+
+### Document Block
+
+The `document` block defines the fields that are stored:
+
+<CodeGroup>
+
+```javascript Simple Fields
+schema product {
+    document product {
+        field title type string {
+            indexing: index | summary
+        }
+        
+        field price type double {
+            indexing: summary | attribute
+        }
+        
+        field in_stock type bool {
+            indexing: attribute
+        }
+    }
+}
+```
+
+```javascript Complex Fields
+schema article {
+    document article {
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+            stemming: best
+        }
+        
+        field body type string {
+            indexing: index | summary
+            index: enable-bm25
+            summary: dynamic
+            stemming: best
+        }
+        
+        field embedding type tensor<float>(x[768]) {
+            indexing: attribute
+        }
+    }
+}
+```
+
+</CodeGroup>
+
+*The complex fields example is inspired by [msmarco.sd:4-49](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L4)*
+
+### Field Configuration
+
+Each field has several configuration options:
+
+<Accordion title="Indexing Directive">
+  Controls how the field is processed:
+  
+  ```javascript
+  field title type string {
+      indexing: index | summary
+  }
+  ```
+  
+  - `index` - Create reverse index for text search
+  - `summary` - Include in search results
+  - `attribute` - Create forward index for ranking, sorting, grouping
+  
+  Multiple directives are combined with `|`
+</Accordion>
+
+<Accordion title="Index Configuration">
+  Additional indexing options:
+  
+  ```javascript
+  field content type string {
+      indexing: index | summary
+      index: enable-bm25
+      stemming: best
+  }
+  ```
+  
+  - `enable-bm25` - Enable BM25 text ranking
+  - `enable-embedding` - Enable semantic search
+</Accordion>
+
+<Accordion title="Summary Configuration">
+  Control how field appears in results:
+  
+  ```javascript
+  field body type string {
+      indexing: index | summary
+      summary: dynamic
+  }
+  ```
+  
+  - `dynamic` - Generate snippets with query term highlighting
+  - `static` - Return full field content
+</Accordion>
+
+<Accordion title="Stemming">
+  Configure linguistic processing:
+  
+  ```javascript
+  field title type string {
+      indexing: index
+      stemming: best
+  }
+  ```
+  
+  - `best` - Use best available stemmer for language
+  - `none` - No stemming
+  - `shortest`, `multiple` - Stemming variants
+</Accordion>
+
+## Indexing Language
+
+The `indexing` directive uses a powerful expression language for field processing:
+
+### Indexing Expressions
+
+<CodeGroup>
+
+```javascript Basic
+field title type string {
+    indexing: input title | index | summary
+}
+```
+
+```javascript Derived Field
+field title_lowercase type string {
+    indexing: input title | lowercase | index
+}
+```
+
+```javascript Combining Fields
+field full_name type string {
+    indexing: input first_name . " " . input last_name | summary
+}
+```
+
+```javascript Conditional
+field age_group type string {
+    indexing {
+        input age < 18 ? "minor" : "adult" | summary;
+    }
+}
+```
+
+</CodeGroup>
+
+<Note>
+The indexing language is implemented in the [`indexinglanguage`](https://github.com/vespa-engine/vespa/tree/master/indexinglanguage) module.
+</Note>
+
+## Attributes
+
+Attributes are **forward indexes** that enable fast access to field values during ranking and grouping.
+
+### When to Use Attributes
+
+<CardGroup cols={2}>
+  <Card title="Ranking" icon="ranking-star">
+    Fields used in rank expressions
+  </Card>
+  <Card title="Grouping" icon="layer-group">
+    Fields used for aggregation
+  </Card>
+  <Card title="Sorting" icon="arrow-down-a-z">
+    Fields used to order results
+  </Card>
+  <Card title="Filtering" icon="filter">
+    Numeric or boolean filters
+  </Card>
+</CardGroup>
+
+### Attribute Configuration
+
+```javascript
+field price type double {
+    indexing: summary | attribute
+    attribute: fast-search
+}
+
+field tags type array<string> {
+    indexing: summary | attribute
+    attribute: fast-search
+}
+
+field user_vector type tensor<float>(x[128]) {
+    indexing: attribute | index
+    attribute {
+        distance-metric: angular
+    }
+    index {
+        hnsw {
+            max-links-per-node: 16
+            neighbors-to-explore-at-insert: 200
+        }
+    }
+}
+```
+
+*Attribute configuration patterns from Vespa schema implementation*
+
+## Field Sets
+
+Field sets group fields for convenient searching:
+
+```javascript
+schema article {
+    document article {
+        field title type string {
+            indexing: index | summary
+        }
+        
+        field body type string {
+            indexing: index | summary
+        }
+    }
+    
+    fieldset default {
+        fields: title, body
+    }
+}
+```
+
+*Example from [msmarco.sd:57](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L57)*
+
+Now queries automatically search both fields:
+
+```
+select * from article where default contains "vespa"
+```
+
+## Tensor Fields
+
+Tensor fields store multi-dimensional arrays, essential for machine learning:
+
+```javascript
+field title_embedding type tensor<float>(x[768]) {
+    indexing: attribute
+}
+
+field image_features type tensor<float>(x[512]) {
+    indexing: attribute | index
+    attribute {
+        distance-metric: euclidean
+    }
+    index {
+        hnsw {
+            max-links-per-node: 16
+            neighbors-to-explore-at-insert: 100
+        }
+    }
+}
+```
+
+*Based on tensor fields in [msmarco.sd:27-49](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L27)*
+
+<Note>
+Tensor fields can be indexed with HNSW (Hierarchical Navigable Small World) for approximate nearest neighbor search.
+</Note>
+
+## Document Summaries
+
+Control which fields are returned in search results:
+
+```javascript
+schema product {
+    document product {
+        field id type string {
+            indexing: summary | attribute
+        }
+        
+        field title type string {
+            indexing: index | summary
+        }
+        
+        field description type string {
+            indexing: index | summary
+        }
+    }
+    
+    document-summary minimal {
+        summary id type string {}
+        summary title type string {}
+    }
+    
+    document-summary full {
+        summary id type string {}
+        summary title type string {}
+        summary description type string {}
+    }
+}
+```
+
+*Document summary pattern from [msmarco.sd:53](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd#L53)*
+
+## Schema Inheritance
+
+Schemas can inherit from other schemas:
+
+```javascript
+schema base_document {
+    document base_document {
+        field created_time type long {
+            indexing: summary | attribute
+        }
+        
+        field modified_time type long {
+            indexing: summary | attribute
+        }
+    }
+}
+
+schema article inherits base_document {
+    document article inherits base_document {
+        field title type string {
+            indexing: index | summary
+        }
+    }
+}
+```
+
+## Real-World Example
+
+Here's a complete schema for a search application:
+
+```javascript msmarco.sd
+schema msmarco {
+    document msmarco {
+        field id type string {
+            indexing: summary | attribute
+        }
+
+        field title type string {
+            indexing: index | summary
+            index: enable-bm25
+            stemming: best
+        }
+
+        field body type string {
+            indexing: index | summary
+            index: enable-bm25
+            summary: dynamic
+            stemming: best
+        }
+
+        field title_embedding type tensor<float>(x[768]) {
+            indexing: attribute
+        }
+
+        field body_embedding type tensor<float>(x[768]) {
+            indexing: attribute
+        }
+    }
+
+    fieldset default {
+        fields: title, body
+    }
+
+    rank-profile bm25 {
+        first-phase {
+            expression: bm25(title) + bm25(body)
+        }
+    }
+
+    rank-profile semantic {
+        function title_similarity() {
+            expression: sum(query(query_embedding) * attribute(title_embedding))
+        }
+        
+        first-phase {
+            expression: title_similarity()
+        }
+    }
+}
+```
+
+*Simplified from [msmarco.sd](https://github.com/vespa-engine/vespa/blob/master/client/go/internal/cli/cmd/testdata/applications/withSource/src/main/application/schemas/msmarco.sd)*
+
+## Schema Processing Implementation
+
+Schemas are processed by the config model:
+
+<Steps>
+  <Step title="Parse Schema File">
+    Schema definition is parsed into an AST
+  </Step>
+  <Step title="Build Document Type">
+    Document type structure is created from schema
+  </Step>
+  <Step title="Generate Configurations">
+    Index, attribute, and rank configurations are generated
+  </Step>
+  <Step title="Deploy to Nodes">
+    Configurations are distributed to content and container nodes
+  </Step>
+</Steps>
+
+**Key Modules**:
+- [`config-model`](https://github.com/vespa-engine/vespa/tree/master/config-model) - Schema parsing and validation
+- [`indexinglanguage`](https://github.com/vespa-engine/vespa/tree/master/indexinglanguage) - Indexing expression execution
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Index Text Fields" icon="magnifying-glass">
+    Use `index` for fields you'll search with text queries
+  </Card>
+  <Card title="Attribute Numeric Fields" icon="hashtag">
+    Use `attribute` for numeric fields used in ranking or filtering
+  </Card>
+  <Card title="Enable BM25" icon="ranking-star">
+    Add `index: enable-bm25` for better text ranking
+  </Card>
+  <Card title="Use Tensors for ML" icon="brain">
+    Store embeddings as tensor fields for semantic search
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Search" icon="magnifying-glass" href="/concepts/search">
+    Learn how search works
+  </Card>
+  <Card title="Ranking" icon="ranking-star" href="/concepts/ranking">
+    Configure ranking profiles
+  </Card>
+  <Card title="Tensors" icon="cube" href="/concepts/tensors">
+    Work with tensor fields
+  </Card>
+</CardGroup>

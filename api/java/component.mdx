@@ -1,0 +1,618 @@
+---
+title: Component API
+description: Build container components with dependency injection
+---
+
+The Component API provides the foundation for building extensible components in the Vespa container. It defines lifecycle management, identity, and dependency injection for all container components.
+
+## Overview
+
+The Component API enables:
+
+- **Component identity** - Unique identification and versioning
+- **Lifecycle management** - Construction, service, and deconstruction phases
+- **Dependency injection** - Automatic wiring of component dependencies
+- **Ordering** - Components can be ordered by their IDs
+
+Source: `component/src/main/java/com/yahoo/component/Component.java:5`
+
+## Component Interface
+
+The basic `Component` interface defines identity:
+
+```java
+package com.yahoo.component;
+
+public interface Component extends Comparable<Component> {
+    /** Initializes this component with an id */
+    void initId(ComponentId id);
+
+    /** Returns the id of this component */
+    ComponentId getId();
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/Component.java:13`
+
+## AbstractComponent
+
+Most components extend `AbstractComponent`, which implements the `Component` interface and provides lifecycle management:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import com.yahoo.component.ComponentId;
+
+public class MyComponent extends AbstractComponent {
+    private final SomeConfig config;
+
+    // Dependency injection via constructor
+    @Inject
+    public MyComponent(SomeConfig config) {
+        this.config = config;
+    }
+
+    // Your component logic here
+    public String doSomething() {
+        return "Result: " + config.value();
+    }
+
+    @Override
+    public void deconstruct() {
+        // Clean up resources
+        super.deconstruct();
+    }
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:14`
+
+## Component Lifecycle
+
+<Steps>
+  <Step title="Construction">
+    The container creates the component instance and injects dependencies through the constructor.
+
+    ```java
+    public MyComponent(Dependency1 dep1, Dependency2 dep2, MyConfig config) {
+        super(); // Call parent constructor
+        this.dep1 = dep1;
+        this.dep2 = dep2;
+        this.config = config;
+        // Build immutable data structures here
+    }
+    ```
+
+    <Note>
+    Keep constructors fast. They block container reconfiguration.
+    </Note>
+  </Step>
+
+  <Step title="In Service">
+    Component methods are called by multiple threads concurrently. The component serves requests until it's replaced during reconfiguration.
+
+    ```java
+    public String processRequest(String input) {
+        // Called by multiple threads
+        // Use immutable data or synchronize access
+        return transform(input);
+    }
+    ```
+  </Step>
+
+  <Step title="Deconstruction">
+    When replaced, `deconstruct()` is called after all ongoing requests complete. Components are deconstructed in reverse dependency order.
+
+    ```java
+    @Override
+    public void deconstruct() {
+        // Clean up resources
+        if (threadPool != null) {
+            threadPool.shutdown();
+        }
+        super.deconstruct();
+    }
+    ```
+  </Step>
+</Steps>
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:121`
+
+## Constructor Selection
+
+The container selects constructors in this priority order:
+
+1. Constructor with `ComponentId` + most config classes
+2. Constructor with `String` id + most config classes
+3. Constructor with only config classes (most)
+4. Constructor with `ComponentId` only
+5. Constructor with `String` id only
+6. Default no-argument constructor
+
+```java
+import com.yahoo.component.AbstractComponent;
+import com.yahoo.component.ComponentId;
+
+public class FlexibleComponent extends AbstractComponent {
+    // Priority 1: ComponentId + config
+    public FlexibleComponent(ComponentId id, MyConfig config) {
+        super(id);
+    }
+
+    // Priority 4: ComponentId only
+    public FlexibleComponent(ComponentId id) {
+        super(id);
+    }
+
+    // Priority 6: Default constructor
+    public FlexibleComponent() {
+        super();
+    }
+}
+```
+
+<Note>
+For dependency injection, you typically only need one constructor with all dependencies.
+</Note>
+
+## Component Identity
+
+Every component has a unique `ComponentId`:
+
+```java
+import com.yahoo.component.ComponentId;
+
+public class IdentityExample extends AbstractComponent {
+    public IdentityExample(ComponentId id) {
+        super(id);
+    }
+
+    public void showIdentity() {
+        ComponentId id = getId();
+        System.out.println("Component: " + id.toString());
+        System.out.println("Name: " + id.getName());
+        System.out.println("Version: " + id.getVersion());
+    }
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:55`
+
+### Anonymous Components
+
+Components created without an explicit ID get an anonymous ID:
+
+```java
+MyComponent component = new MyComponent();
+ComponentId id = component.getId(); // Returns anonymous ID
+```
+
+<Warning>
+Do not call `getId()` during construction. The ID may not be initialized yet.
+</Warning>
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:57`
+
+## Dependency Injection
+
+### Basic Injection
+
+Inject dependencies through the constructor:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import javax.inject.Inject;
+
+public class ServiceComponent extends AbstractComponent {
+    private final DatabaseConnection db;
+    private final CacheService cache;
+    private final MetricsReporter metrics;
+
+    @Inject
+    public ServiceComponent(DatabaseConnection db,
+                           CacheService cache,
+                           MetricsReporter metrics) {
+        this.db = db;
+        this.cache = cache;
+        this.metrics = metrics;
+    }
+
+    public Data getData(String key) {
+        metrics.increment("getData.calls");
+        Data cached = cache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Data data = db.query(key);
+        cache.put(key, data);
+        return data;
+    }
+}
+```
+
+### Configuration Injection
+
+Configuration classes are automatically injected:
+
+```java
+import com.yahoo.component.AbstractComponent;
+
+public class ConfiguredComponent extends AbstractComponent {
+    private final String endpoint;
+    private final int timeout;
+    private final boolean enableCache;
+
+    @Inject
+    public ConfiguredComponent(MyComponentConfig config) {
+        this.endpoint = config.endpoint();
+        this.timeout = config.timeout();
+        this.enableCache = config.enableCache();
+    }
+}
+```
+
+### Multiple Configs
+
+Inject multiple configuration classes:
+
+```java
+import com.yahoo.component.AbstractComponent;
+
+public class MultiConfigComponent extends AbstractComponent {
+    @Inject
+    public MultiConfigComponent(DatabaseConfig dbConfig,
+                               CacheConfig cacheConfig,
+                               MetricsConfig metricsConfig) {
+        // Use all configs
+    }
+}
+```
+
+## Deconstruction
+
+Implement `deconstruct()` to clean up resources:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+public class ResourceComponent extends AbstractComponent {
+    private final ExecutorService executor;
+    private final HttpClient httpClient;
+
+    public ResourceComponent() {
+        this.executor = Executors.newFixedThreadPool(10);
+        this.httpClient = HttpClient.newBuilder().build();
+    }
+
+    @Override
+    public void deconstruct() {
+        // Shutdown executor gracefully
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        // Close HTTP client
+        // httpClient.close(); // If your client is Closeable
+
+        // Always call super.deconstruct()
+        super.deconstruct();
+    }
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:132`
+
+### Deconstructable Check
+
+The container automatically detects if your component overrides `deconstruct()`:
+
+```java
+public boolean hasCustomDeconstruct() {
+    return isDeconstructable(); // Returns true if deconstruct() is overridden
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:138`
+
+## Thread Safety
+
+<Warning>
+Components are called by multiple threads concurrently. All mutable shared state must be thread-safe.
+</Warning>
+
+### Immutable State Pattern
+
+Prefer immutable data structures built during construction:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Collections;
+
+public class ThreadSafeComponent extends AbstractComponent {
+    // Immutable - safe for concurrent access
+    private final Map<String, String> lookupTable;
+    private final String endpoint;
+
+    public ThreadSafeComponent(MyConfig config) {
+        // Build during construction
+        Map<String, String> temp = new HashMap<>();
+        for (var entry : config.mappings()) {
+            temp.put(entry.key(), entry.value());
+        }
+        this.lookupTable = Collections.unmodifiableMap(temp);
+        this.endpoint = config.endpoint(); // Strings are immutable
+    }
+
+    // Safe: Read-only access to immutable data
+    public String lookup(String key) {
+        return lookupTable.get(key);
+    }
+}
+```
+
+### Synchronized Access Pattern
+
+When mutable state is necessary:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class StatefulComponent extends AbstractComponent {
+    // Thread-safe collections
+    private final ConcurrentHashMap<String, Data> cache = new ConcurrentHashMap<>();
+
+    // Atomic counters
+    private final AtomicLong requestCount = new AtomicLong(0);
+
+    public Data getData(String key) {
+        requestCount.incrementAndGet();
+        return cache.computeIfAbsent(key, this::fetchData);
+    }
+
+    private Data fetchData(String key) {
+        // Fetch from external source
+        return new Data(key);
+    }
+
+    public long getRequestCount() {
+        return requestCount.get();
+    }
+}
+```
+
+## Component Ordering
+
+Components implement `Comparable<Component>` and are ordered by their IDs:
+
+```java
+import com.yahoo.component.AbstractComponent;
+import com.yahoo.component.ComponentId;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+
+public class ComponentOrdering {
+    public static void main(String[] args) {
+        List<AbstractComponent> components = new ArrayList<>();
+        components.add(new MyComponent(new ComponentId("component-a")));
+        components.add(new MyComponent(new ComponentId("component-c")));
+        components.add(new MyComponent(new ComponentId("component-b")));
+
+        // Sort by component ID
+        Collections.sort(components);
+
+        // Now: component-a, component-b, component-c
+    }
+}
+```
+
+Source: `component/src/main/java/com/yahoo/component/AbstractComponent.java:117`
+
+## Provider Pattern
+
+For advanced component creation, use the `Provider` interface:
+
+```java
+import com.yahoo.container.di.componentgraph.Provider;
+
+public class ComplexComponentProvider implements Provider<ComplexComponent> {
+    private final MyConfig config;
+    private ComplexComponent instance;
+
+    @Inject
+    public ComplexComponentProvider(MyConfig config) {
+        this.config = config;
+    }
+
+    @Override
+    public ComplexComponent get() {
+        if (instance == null) {
+            // Complex initialization
+            instance = new ComplexComponent();
+            instance.configure(config);
+            instance.initialize();
+            instance.warmup();
+        }
+        return instance;
+    }
+
+    @Override
+    public void deconstruct() {
+        if (instance != null) {
+            instance.shutdown();
+        }
+    }
+}
+```
+
+See [Container API](/api/java/container#provider-pattern) for more details.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Immutable Data Structures">
+    Build data structures during construction and keep them immutable:
+
+    ```java
+    public class GoodComponent extends AbstractComponent {
+        private final Map<String, Integer> data;
+
+        public GoodComponent(MyConfig config) {
+            Map<String, Integer> temp = new HashMap<>();
+            for (var item : config.items()) {
+                temp.put(item.key(), item.value());
+            }
+            this.data = Collections.unmodifiableMap(temp);
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Keep Constructors Fast">
+    Avoid expensive operations in constructors:
+
+    ```java
+    // Good - fast initialization
+    public MyComponent(MyConfig config) {
+        this.apiKey = config.apiKey();
+        this.endpoint = config.endpoint();
+    }
+
+    // Bad - slow network call
+    public MyComponent(MyConfig config) {
+        this.data = fetchFromRemote(config.endpoint()); // Blocks!
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Clean Up Resources Properly">
+    Always implement `deconstruct()` for resource cleanup:
+
+    ```java
+    @Override
+    public void deconstruct() {
+        try {
+            // Close resources
+            if (connection != null) {
+                connection.close();
+            }
+        } catch (Exception e) {
+            log.warning("Error during deconstruct: " + e.getMessage());
+        } finally {
+            super.deconstruct();
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Don't Call getId() in Constructor">
+    The ID may not be initialized during construction:
+
+    ```java
+    // Bad
+    public MyComponent() {
+        String id = getId().toString(); // May fail!
+    }
+
+    // Good
+    public MyComponent() {
+        // Initialize without using ID
+    }
+
+    public void someMethod() {
+        String id = getId().toString(); // Safe after construction
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Make Components Testable">
+    Design components for easy testing:
+
+    ```java
+    public class TestableComponent extends AbstractComponent {
+        private final DataSource dataSource;
+
+        // Injectable dependencies
+        public TestableComponent(DataSource dataSource) {
+            this.dataSource = dataSource;
+        }
+
+        // Easy to test with mock DataSource
+        public Data fetchData(String key) {
+            return dataSource.get(key);
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Testing Components
+
+```java
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+class MyComponentTest {
+    private MyComponent component;
+    private MyConfig config;
+
+    @BeforeEach
+    void setUp() {
+        // Create mock config
+        config = mock(MyConfig.class);
+        when(config.endpoint()).thenReturn("http://test.example.com");
+        when(config.timeout()).thenReturn(1000);
+
+        // Create component
+        component = new MyComponent(config);
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Clean up
+        component.deconstruct();
+    }
+
+    @Test
+    void testProcessing() {
+        String result = component.process("input");
+        assertEquals("expected", result);
+    }
+
+    @Test
+    void testThreadSafety() throws InterruptedException {
+        // Test concurrent access
+        Thread t1 = new Thread(() -> component.process("input1"));
+        Thread t2 = new Thread(() -> component.process("input2"));
+
+        t1.start();
+        t2.start();
+
+        t1.join();
+        t2.join();
+
+        // Verify no exceptions occurred
+    }
+}
+```
+
+## Related APIs
+
+- [jDisc Container](/api/java/container) - Container runtime environment
+- [Searcher API](/api/java/searcher) - Search chain components
+- [Document Processor API](/api/java/document-processor) - Document processing components

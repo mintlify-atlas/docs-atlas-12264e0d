@@ -1,0 +1,482 @@
+---
+title: Scaling
+description: Scale Vespa horizontally and vertically to handle growing data and traffic
+---
+
+Vespa is designed to scale from single-node development setups to large production clusters serving billions of documents and thousands of queries per second.
+
+## Scaling Strategies
+
+<CardGroup cols={2}>
+  <Card title="Horizontal Scaling" icon="arrows-left-right">
+    Add more nodes to distribute load and data
+  </Card>
+  <Card title="Vertical Scaling" icon="arrows-up-down">
+    Increase resources (CPU, memory, disk) on existing nodes
+  </Card>
+</CardGroup>
+
+## Content Cluster Scaling
+
+Content clusters store and index documents. Scaling them affects both capacity and query throughput.
+
+### Adding Content Nodes
+
+<Steps>
+  <Step title="Update services.xml">
+    Add new nodes to your content cluster configuration:
+    ```xml
+    <content version="1.0" id="my-content">
+      <redundancy>2</redundancy>
+      <documents>
+        <document type="mydoc" mode="index"/>
+      </documents>
+      <nodes>
+        <node hostalias="node1" distribution-key="0"/>
+        <node hostalias="node2" distribution-key="1"/>
+        <node hostalias="node3" distribution-key="2"/>  <!-- New node -->
+        <node hostalias="node4" distribution-key="3"/>  <!-- New node -->
+      </nodes>
+    </content>
+    ```
+  </Step>
+  
+  <Step title="Deploy Configuration">
+    Deploy the updated configuration:
+    ```bash
+    vespa deploy
+    ```
+    
+    Vespa will automatically redistribute data to the new nodes.
+  </Step>
+  
+  <Step title="Monitor Redistribution">
+    Track the redistribution progress:
+    ```bash
+    # Check bucket distribution
+    vespa-stat --document mydoc
+    
+    # Monitor merge operations
+    curl http://localhost:19050/state/v1/metrics | \
+      jq '.metrics.values[] | select(.name | contains("merge"))'
+    ```
+  </Step>
+</Steps>
+
+### Data Distribution
+
+Vespa uses bucket distribution to spread data across nodes. The system automatically:
+
+- Splits buckets when they grow too large
+- Joins buckets when they're too small
+- Migrates buckets during topology changes
+- Maintains configured redundancy levels
+
+<Note>
+Data redistribution happens automatically but can take time for large datasets. Plan scaling operations during low-traffic periods when possible.
+</Note>
+
+### Bucket Metrics During Scaling
+
+```java
+// Monitor these metrics during scaling (from StorageMetrics.java)
+VDS_DATASTORED_ALLDISKS_BUCKETS        // Total buckets
+VDS_DATASTORED_BUCKET_SPACE_BUCKETS_TOTAL  // Buckets per space
+VDS_MERGETHROTTLER_QUEUESIZE           // Pending merges
+VDS_MERGETHROTTLER_ACTIVE_WINDOW_SIZE  // Active merges
+
+// Bucket operations
+VDS_FILESTOR_ALLTHREADS_SPLITBUCKETS_COUNT // Bucket splits
+VDS_FILESTOR_ALLTHREADS_JOINBUCKETS_COUNT  // Bucket joins
+VDS_FILESTOR_ALLTHREADS_MERGEBUCKETS_COUNT // Bucket merges
+```
+
+## Container Cluster Scaling
+
+Container nodes handle queries and feeding. They're stateless and can be scaled easily.
+
+### Horizontal Scaling
+
+<CodeGroup>
+```xml Add Container Nodes
+<container version="1.0" id="default">
+  <search/>
+  <document-api/>
+  
+  <nodes>
+    <node hostalias="container1"/>
+    <node hostalias="container2"/>
+    <node hostalias="container3"/>  <!-- Scale out -->
+    <node hostalias="container4"/>  <!-- Scale out -->
+  </nodes>
+</container>
+```
+
+```xml Auto-Scaling with Ranges
+<container version="1.0" id="default">
+  <search/>
+  <document-api/>
+  
+  <!-- Use node count ranges -->
+  <nodes count="[2,8]" />
+</container>
+```
+</CodeGroup>
+
+### Load Balancing
+
+Distribute traffic across container nodes:
+
+```nginx nginx.conf
+upstream vespa_containers {
+    # Round-robin by default
+    server container1:8080 weight=1;
+    server container2:8080 weight=1;
+    server container3:8080 weight=1;
+    
+    # Health check
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    
+    location /search/ {
+        proxy_pass http://vespa_containers;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    
+    location /document/ {
+        proxy_pass http://vespa_containers;
+    }
+}
+```
+
+### Container Metrics for Scaling Decisions
+
+<Accordion title="Query Load Indicators">
+```java
+// From ContainerMetrics.java
+PEAK_QPS                // Peak queries per second
+QUERIES                 // Total queries
+QUERY_LATENCY           // Query latency
+FAILED_QUERIES          // Failed query count
+
+// Thread pool saturation
+JDISC_THREAD_POOL_ACTIVE_THREADS    // Active threads
+JDISC_THREAD_POOL_SIZE              // Pool size
+JDISC_THREAD_POOL_WORK_QUEUE_SIZE   // Queue depth
+JDISC_THREAD_POOL_REJECTED_TASKS    // Rejected tasks
+```
+
+**Scale out when:**
+- Thread pool utilization > 80% consistently
+- Query latency increases under load
+- Rejected tasks > 0
+</Accordion>
+
+<Accordion title="Feed Load Indicators">
+```java
+HTTPAPI_NUM_OPERATIONS    // Document operations/sec
+HTTPAPI_PENDING           // Pending operations
+HTTPAPI_QUEUED_OPERATIONS // Queued operations
+HTTPAPI_FAILED_TIMEOUT    // Timeout failures
+```
+
+**Scale out when:**
+- Queued operations consistently > 1000
+- Operation timeouts increasing
+- Feed latency > 100ms for simple puts
+</Accordion>
+
+## Vertical Scaling
+
+Increase resources on existing nodes when:
+- Individual nodes are bottlenecked
+- Adding nodes isn't cost-effective
+- You need more memory for in-memory data structures
+
+### CPU Scaling
+
+<Steps>
+  <Step title="Identify CPU Bottlenecks">
+    ```java
+    // Monitor CPU utilization (from SearchNodeMetrics.java)
+    CONTENT_PROTON_RESOURCE_USAGE_CPU_UTIL_READ     // Read operations
+    CONTENT_PROTON_RESOURCE_USAGE_CPU_UTIL_WRITE    // Write operations
+    CONTENT_PROTON_RESOURCE_USAGE_CPU_UTIL_COMPACT  // Compaction
+    ```
+  </Step>
+  
+  <Step title="Adjust Thread Pools">
+    Configure executor threads in services.xml:
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <summary>
+            <io>
+              <threads>8</threads>  <!-- Match CPU cores -->
+            </io>
+          </summary>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+  </Step>
+  
+  <Step title="Scale Instance Size">
+    Increase vCPUs on your nodes and redeploy.
+  </Step>
+</Steps>
+
+### Memory Scaling
+
+<Accordion title="Content Node Memory">
+Content nodes use memory for:
+- Document attribute vectors
+- Memory index
+- Document store cache
+- Query execution
+
+```xml
+<content version="1.0" id="my-content">
+  <tuning>
+    <searchnode>
+      <!-- Configure memory limits -->
+      <resource-limits>
+        <memory>0.85</memory>  <!-- 85% memory limit -->
+      </resource-limits>
+    </searchnode>
+  </tuning>
+</content>
+```
+
+**Memory metrics to monitor:**
+```java
+CONTENT_PROTON_RESOURCE_USAGE_MEMORY               // Overall memory usage
+CONTENT_PROTON_DOCUMENTDB_MEMORY_USAGE_USED_BYTES  // Used memory
+CONTENT_PROTON_DOCUMENTDB_ATTRIBUTE_MEMORY_USAGE_USED_BYTES
+CONTENT_PROTON_RESOURCE_USAGE_FEEDING_BLOCKED      // Feeding blocked by memory
+```
+</Accordion>
+
+<Accordion title="Container Node Memory">
+Container nodes use memory for:
+- JVM heap
+- Query result caching
+- Component instances
+
+```xml
+<container version="1.0" id="default">
+  <nodes>
+    <jvm options="-Xms4g -Xmx4g"/>
+  </nodes>
+</container>
+```
+
+**Memory metrics to monitor:**
+```java
+MEM_HEAP_USED          // Heap memory used
+MEM_HEAP_TOTAL         // Total heap
+JDISC_GC_MS            // GC pause time
+JDISC_GC_COUNT         // GC frequency
+```
+</Accordion>
+
+### Disk Scaling
+
+<Steps>
+  <Step title="Monitor Disk Usage">
+    ```java
+    CONTENT_PROTON_DOCUMENTDB_DISK_USAGE         // Disk usage per DB
+    CONTENT_PROTON_RESOURCE_USAGE_DISK           // Overall disk usage
+    CONTENT_PROTON_TRANSACTIONLOG_DISK_USAGE     // Transaction log
+    ```
+  </Step>
+  
+  <Step title="Optimize Storage">
+    Enable compression and tune document store:
+    ```xml
+    <content version="1.0" id="my-content">
+      <tuning>
+        <searchnode>
+          <summary>
+            <store>
+              <compression>
+                <type>lz4</type>
+                <level>6</level>
+              </compression>
+            </store>
+          </summary>
+        </searchnode>
+      </tuning>
+    </content>
+    ```
+  </Step>
+  
+  <Step title="Scale Disk Capacity">
+    - Increase disk size on existing nodes, or
+    - Add more content nodes to distribute data
+  </Step>
+</Steps>
+
+## Redundancy and Availability
+
+Configure redundancy to balance availability and resource usage:
+
+```xml
+<content version="1.0" id="my-content">
+  <!-- Number of copies of each document -->
+  <redundancy>2</redundancy>
+  
+  <!-- Minimum copies before marking bucket out of sync -->
+  <min-redundancy>1</min-redundancy>
+  
+  <nodes>
+    <node hostalias="node1" distribution-key="0"/>
+    <node hostalias="node2" distribution-key="1"/>
+    <node hostalias="node3" distribution-key="2"/>
+  </nodes>
+</content>
+```
+
+### Redundancy Guidelines
+
+| Cluster Size | Recommended Redundancy | Notes |
+|--------------|------------------------|-------|
+| 1-2 nodes | 1 | Development only |
+| 3-5 nodes | 2 | Standard production |
+| 6-10 nodes | 2-3 | High availability |
+| 10+ nodes | 3 | Large scale production |
+
+<Warning>
+Redundancy > 3 rarely provides additional benefits and increases resource usage linearly.
+</Warning>
+
+## Scaling Patterns
+
+### Progressive Scaling
+
+<Steps>
+  <Step title="Start Small">
+    Begin with minimal resources:
+    - 3 content nodes (redundancy=2)
+    - 2 container nodes
+  </Step>
+  
+  <Step title="Monitor and Measure">
+    Collect baseline metrics under realistic load
+  </Step>
+  
+  <Step title="Scale Incrementally">
+    Add resources based on bottlenecks:
+    - High CPU → Add container nodes
+    - High memory → Scale content node memory
+    - Large dataset → Add content nodes
+  </Step>
+  
+  <Step title="Validate">
+    Test performance after each scaling operation
+  </Step>
+</Steps>
+
+### Geographic Distribution
+
+Scale across regions for global applications:
+
+```xml
+<!-- Parent services.xml -->
+<services>
+  <container version="1.0" id="query">
+    <nodes>
+      <node hostalias="us-east-1"/>
+      <node hostalias="us-west-1"/>
+      <node hostalias="eu-west-1"/>
+    </nodes>
+  </container>
+  
+  <content version="1.0" id="global">
+    <redundancy>3</redundancy>
+    <nodes>
+      <!-- Distribute across regions -->
+      <node hostalias="us-east-1" distribution-key="0"/>
+      <node hostalias="us-west-1" distribution-key="1"/>
+      <node hostalias="eu-west-1" distribution-key="2"/>
+    </nodes>
+  </content>
+</services>
+```
+
+## Auto-Scaling Considerations
+
+While Vespa doesn't auto-scale automatically, you can implement auto-scaling:
+
+### Metrics-Based Auto-Scaling
+
+```python
+# Example: Monitor metrics and trigger scaling
+import requests
+import time
+
+def check_scaling_needed():
+    metrics = requests.get('http://localhost:19092/metrics/v2/values').json()
+    
+    # Extract key metrics
+    cpu_util = get_metric(metrics, 'cpu')
+    query_latency = get_metric(metrics, 'query_latency.average')
+    rejected_tasks = get_metric(metrics, 'jdisc.thread_pool.rejected_tasks')
+    
+    # Scaling logic
+    if cpu_util > 80 or query_latency > 1000 or rejected_tasks > 10:
+        scale_out_containers()
+    elif cpu_util < 30 and query_latency < 100:
+        scale_in_containers()
+
+def scale_out_containers():
+    # Update services.xml and deploy
+    print("Scaling out container nodes...")
+    # Implementation depends on infrastructure
+
+def scale_in_containers():
+    print("Scaling in container nodes...")
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Capacity Planning">
+    - **Measure before scaling**: Establish baseline metrics
+    - **Test scaling operations**: Validate in staging first
+    - **Plan for growth**: Scale before hitting limits (70-80% capacity)
+    - **Consider redundancy**: Factor in failure scenarios
+  </Accordion>
+  
+  <Accordion title="Scaling Timeline">
+    - **Container scaling**: Immediate (stateless)
+    - **Content node addition**: Minutes to hours (data redistribution)
+    - **Vertical scaling**: Requires restart (plan downtime or rolling upgrade)
+  </Accordion>
+  
+  <Accordion title="Cost Optimization">
+    - Start with vertical scaling if under-provisioned
+    - Use horizontal scaling for better availability
+    - Monitor resource utilization to avoid over-provisioning
+    - Consider tiered storage for large datasets
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up metrics to inform scaling decisions
+  </Card>
+  <Card title="Tuning" icon="sliders" href="/operations/tuning">
+    Optimize performance before scaling
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Debug scaling issues
+  </Card>
+</CardGroup>
